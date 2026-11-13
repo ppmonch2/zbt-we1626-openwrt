@@ -29,7 +29,7 @@ fi
 WIFI_PASS="$(sed -n 's/^WIFI_PSK=//p' "$CRED" | head -n 1 | tr -d '\r')"
 ROOT_HASH="$(sed -n 's/^ROOT_SHA512=//p' "$CRED" | head -n 1 | tr -d '\r')"
 WIFI_LEN="$(printf '%s' "$WIFI_PASS" | wc -c)"
-if [ "$WIFI_LEN" -lt 16 ] || [ "$WIFI_LEN" -gt 63 ] || ! printf '%s' "$WIFI_PASS" | grep -Eq '^[A-Za-z0-9]+$'; then
+if [ "$WIFI_LEN" -lt 8 ] || [ "$WIFI_LEN" -gt 63 ] || ! printf '%s' "$WIFI_PASS" | grep -Eq '^[A-Za-z0-9]+$'; then
   logger -t DH-SETUP 'Invalid Wi-Fi password'; umount "$DIR" || true; exit 1
 fi
 if ! printf '%s' "$ROOT_HASH" | grep -Eq '^\$6\$[A-Za-z0-9./]{8,32}\$[A-Za-z0-9./]{70,100}$'; then
