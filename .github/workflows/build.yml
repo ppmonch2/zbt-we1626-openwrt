@@ -20,10 +20,39 @@ jobs:
         run: |
           bash -n build.sh
           sh -n overlay/etc/uci-defaults/98-heatbridge
-          sh -n overlay/etc/uci-defaults/99-heatbridge-usb-setup
+          sh -n overlay/etc/uci-defaults/99-heatbridge-open-setup
           sh -n overlay/etc/hotplug.d/net/90-dh-zte-wan
-          grep -Fq 'WIFI_SSID=' overlay/etc/uci-defaults/99-heatbridge-usb-setup
-          test "$(grep -c '^exit 0$' overlay/etc/uci-defaults/99-heatbridge-usb-setup)" -eq 1
+          grep -Fq 'wireless.$IFACE.encryption=none' overlay/etc/uci-defaults/99-heatbridge-open-setup
+          grep -Fq 'network.wanusb.disabled=1' overlay/etc/uci-defaults/99-heatbridge-open-setup
+          test "$(grep -c '^exit 0
+          sh -n overlay/usr/sbin/heatbridge-enable
+          sh -n overlay/www/heatbridge/cgi-bin/api
+          python3 - <<'PY'
+          from pathlib import Path
+          html=Path('overlay/www/heatbridge/index.html').read_text()
+          assert "real_commands_sent" in html
+          assert "<script>" in html and "</script>" in html
+          Path('/tmp/heatbridge-ui.js').write_text(html.split('<script>',1)[1].split('</script>',1)[0])
+          PY
+          node --check /tmp/heatbridge-ui.js
+      - name: Build experimental candidates without secrets
+        run: bash ./build.sh
+      - name: 'Validate integrated image: server, packages, integrity, flash-size'
+        run: python3 tools/audit_image.py output
+      - name: Validate OEM Keenetic Omni II factory format
+        run: python3 tools/audit_factory.py output
+      - name: Validate optional Omni II factory with LuCI
+        run: python3 tools/audit_factory_webui.py output
+      - name: Upload diagnostics and unverified images
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WE1626-CANDIDATES-NOT-FOR-FLASHING
+          path: output/
+          if-no-files-found: warn
+          retention-days: 7
+ overlay/etc/uci-defaults/99-heatbridge-open-setup)" -eq 1
+          ! grep -q 'DACHA.TXT' build.sh
           sh -n overlay/usr/sbin/heatbridge-enable
           sh -n overlay/www/heatbridge/cgi-bin/api
           python3 - <<'PY'
