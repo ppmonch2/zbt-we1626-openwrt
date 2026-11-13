@@ -35,6 +35,8 @@ jobs:
         run: bash ./build.sh
       - name: 'Validate integrated image: server, packages, integrity, flash-size'
         run: python3 tools/audit_image.py output
+      - name: Validate OEM Keenetic Omni II factory format
+        run: python3 tools/audit_factory.py output
       - name: Upload diagnostics and unverified images
         if: always()
         uses: actions/upload-artifact@v4
