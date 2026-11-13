@@ -1,0 +1,12 @@
+#!/bin/sh
+# Run AFTER password is configured on the router by the IT specialist.
+set -eu
+pw="$(awk -F: '$1=="root"{print $2}' /etc/shadow)"
+case "$pw" in ''|'!'|'*'|'!!') echo 'Set a non-empty root password using passwd first.' >&2; exit 1;; esac
+[ -f /etc/config/heatbridge ] || { echo 'Heatbridge configuration missing' >&2; exit 1; }
+uci -q get uhttpd.heatbridge >/dev/null || { echo 'Heatbridge uhttpd section missing' >&2; exit 1; }
+uci set uhttpd.heatbridge.disabled='0'
+uci commit uhttpd
+/etc/init.d/uhttpd restart
+echo 'Dacha Heat Bridge (SIMULATION ONLY) available at http://192.168.1.1:8765/'
+echo 'Authentication: root and configured router password. Never forward port 8765 to WAN.'
