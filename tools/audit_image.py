@@ -38,6 +38,7 @@ for variant in ("heat-lite","heat-webui"):
       "etc/config/heatbridge","usr/sbin/heatbridge-enable",
       "etc/uci-defaults/98-heatbridge",
       "etc/uci-defaults/99-heatbridge-usb-setup",
+      "etc/hotplug.d/net/90-dh-zte-wan",
     )))
     ok=all((hc,kc,sq,metadata,pkgs,safe_size,embedded))
     lines.append(f"{variant}: {len(b)} bytes, profile limit {limit}, unverified headroom {limit-len(b)}, SHA256 {digest}")
