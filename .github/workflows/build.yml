@@ -20,6 +20,7 @@ jobs:
         run: |
           bash -n build.sh
           sh -n overlay/etc/uci-defaults/98-heatbridge
+          sh -n overlay/etc/uci-defaults/99-heatbridge-usb-setup
           sh -n overlay/usr/sbin/heatbridge-enable
           sh -n overlay/www/heatbridge/cgi-bin/api
           python3 - <<'PY'
