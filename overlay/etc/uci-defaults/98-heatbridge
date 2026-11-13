@@ -1,0 +1,13 @@
+#!/bin/sh
+# First boot: register Dacha Heat Bridge as DISABLED. No credentials are embedded.
+uci -q get uhttpd.heatbridge >/dev/null && exit 0
+uci set uhttpd.heatbridge=uhttpd
+uci add_list uhttpd.heatbridge.listen_http='192.168.1.1:8765'
+uci set uhttpd.heatbridge.home='/www/heatbridge'
+uci set uhttpd.heatbridge.cgi_prefix='/cgi-bin'
+uci set uhttpd.heatbridge.config='/etc/heatbridge/httpd.conf'
+uci set uhttpd.heatbridge.disabled='1'
+uci commit uhttpd
+# MQTT is not used until the true BALLU protocol and credentials are checked.
+[ -x /etc/init.d/mosquitto ] && /etc/init.d/mosquitto disable 2>/dev/null || true
+exit 0
