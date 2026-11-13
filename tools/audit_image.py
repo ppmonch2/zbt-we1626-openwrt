@@ -29,7 +29,7 @@ for variant in ("heat-lite","heat-webui"):
     digest=hashlib.sha256(b).hexdigest()
     metadata=any(x["sha256"]==digest and x["size"]==len(b) for x in prof["images"])
     manifest=next(folder.glob("*.manifest")).read_text()
-    pkgs=all((f"{p} " in manifest) for p in ("uhttpd","jsonfilter","mosquitto-nossl","mosquitto-client-nossl","kmod-usb-net-cdc-ether"))
+    pkgs=all((f"{p} " in manifest) for p in ("uhttpd","jsonfilter","mosquitto-nossl","mosquitto-client-nossl","kmod-usb-net-cdc-ether","kmod-usb-storage","kmod-fs-vfat"))
     limit=prof["file_size_limits"]["image"]
     safe_size=len(b)<=min(limit,7333248)
     listing=subprocess.run(["unsquashfs","-l","-o",str(offset),str(images[0])],capture_output=True,text=True)
@@ -37,6 +37,7 @@ for variant in ("heat-lite","heat-webui"):
       "www/heatbridge/index.html","www/heatbridge/cgi-bin/api",
       "etc/config/heatbridge","usr/sbin/heatbridge-enable",
       "etc/uci-defaults/98-heatbridge",
+      "etc/uci-defaults/99-heatbridge-usb-setup",
     )))
     ok=all((hc,kc,sq,metadata,pkgs,safe_size,embedded))
     lines.append(f"{variant}: {len(b)} bytes, profile limit {limit}, unverified headroom {limit-len(b)}, SHA256 {digest}")
