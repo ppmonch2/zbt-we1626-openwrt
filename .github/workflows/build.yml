@@ -32,7 +32,7 @@ jobs:
           node --check /tmp/heatbridge-ui.js
       - name: Build experimental candidates without secrets
         run: bash ./build.sh
-      - name: Validate image headers, driver inclusion and flash-size limits
+      - name: Validate integrated image: server, packages, integrity, flash-size
         run: python3 tools/audit_image.py output
       - name: Upload diagnostics and unverified images
         if: always()
