@@ -30,7 +30,8 @@ packages=all(f"{p} " in manifest for p in
 unpacked=subprocess.run(["unsquashfs","-l","-o",str(sq_start),str(image)],capture_output=True,text=True)
 overlay_ok=unpacked.returncode==0 and all(x in unpacked.stdout for x in
            ("www/heatbridge/index.html","etc/uci-defaults/99-heatbridge-usb-setup",
-            "www/heatbridge/cgi-bin/api","etc/config/heatbridge"))
+            "www/heatbridge/cgi-bin/api","etc/config/heatbridge",
+            "etc/hotplug.d/net/90-dh-zte-wan"))
 results={
     "uimage_header":prefix and header_crc,
     "kernel_crc":kernel_crc,
