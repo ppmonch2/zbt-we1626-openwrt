@@ -71,6 +71,24 @@ else
   echo 'OEM factory variant failed; see omni2-firstflash.log' | tee -a "$ROOT/output/sizes.txt"
   tail -n 35 "$ROOT/output/omni2-firstflash.log" || true
 fi
+# Optional Omni II FACTORY build with LuCI for Android-only post-install WAN setup.
+VENDOR_WEB_DIR="$ROOT/output/omni2-firstflash-webui"
+mkdir -p "$VENDOR_WEB_DIR"
+if make image PROFILE="$VENDOR_PROFILE" PACKAGES='kmod-usb2 kmod-usb-net-cdc-ether kmod-usb-storage kmod-fs-vfat kmod-nls-cp437 kmod-nls-iso8859-1 uhttpd jsonfilter mosquitto-nossl mosquitto-client-nossl luci' FILES="$ROOT/overlay" DISABLED_SERVICES="mosquitto" BIN_DIR="$VENDOR_WEB_DIR" > "$ROOT/output/omni2-firstflash-webui.log" 2>&1; then
+  for bin in "$VENDOR_WEB_DIR/"*squashfs-factory.bin; do
+    [[ -f "$bin" ]] || continue
+    bytes="$(stat -c '%s' "$bin")"
+    echo "omni2-firstflash-webui: $bytes bytes; OEM factory format with LuCI, unverified on ZBT" | tee -a "$ROOT/output/sizes.txt"
+    if (( bytes <= 7533248 )); then
+      sha256sum "$bin" >> "$ROOT/output/SHA256SUMS"
+    else
+      echo 'Omni II webui image exceeds 7,533,248-byte preflight ceiling, omitting' >&2
+      rm -f "$bin"
+    fi
+  done
+else
+  echo 'Omni II factory+LuCI build failed; lite factory remains' >> "$ROOT/output/sizes.txt"
+fi
 if ((vendor_ok==0)); then echo 'No viable OEM-format factory image generated' >&2; exit 1; fi
 if ((ok==0)); then echo 'No size-compliant candidates built' >&2; exit 1; fi
 echo 'Images include Heat Bridge local server and MQTT binaries. NOT approved for first flashing.'
