@@ -1,0 +1,54 @@
+#!/bin/sh
+# No real heater commands are transmitted in this build.
+set -u
+export PATH='/usr/sbin:/usr/bin:/sbin:/bin'
+http_json() { printf 'Content-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n'; }
+error() { http_json; printf '{"ok":false,"error":"%s"}\n' "$1"; exit 0; }
+escape_json() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+readkey() { uci -q get "heatbridge.$1.$2" 2>/dev/null || printf '%s' "$3"; }
+case "$REQUEST_METHOD" in
+  GET) ;;
+  POST)
+    case "$CONTENT_TYPE" in application/json*) ;; *) error 'content_type_must_be_json';; esac
+    size="$CONTENT_LENGTH"
+    case "$size" in ''|*[!0-9]*) error 'invalid_length';; esac
+    [ "$size" -le 512 ] && [ "$size" -gt 1 ] || error 'invalid_length'
+    payload="$(dd bs=1 count="$size" 2>/dev/null)"
+    action="$(jsonfilter -s "$payload" -e '@.action' 2>/dev/null || true)"
+    id="$(jsonfilter -s "$payload" -e '@.id' 2>/dev/null || true)"
+    case "$action" in
+      set)
+        case "$id" in h1|h2|h3|h4) ;; *) error 'invalid_heater';; esac
+        newtemp="$(jsonfilter -s "$payload" -e '@.temp' 2>/dev/null || true)"
+        case "$newtemp" in ''|*[!0-9]*) error 'invalid_temperature';; esac
+        [ "$newtemp" -ge 5 ] && [ "$newtemp" -le 30 ] || error 'invalid_temperature'
+        newname="$(jsonfilter -s "$payload" -e '@.name' 2>/dev/null || true)"
+        if [ -n "$newname" ]; then
+          [ "$(printf '%s' "$newname" | wc -c)" -le 80 ] || error 'name_too_long'
+          printf '%s' "$newname" | grep -q '["\\]' && error 'invalid_name'
+          uci -q set "heatbridge.$id.name=$newname" || error 'save_failed'
+        fi
+        uci -q set "heatbridge.$id.temp=$newtemp" || error 'save_failed'
+        uci commit heatbridge || error 'save_failed'
+        ;;
+      mode)
+        preset="$(jsonfilter -s "$payload" -e '@.preset' 2>/dev/null || true)"
+        case "$preset" in away) newtemp=12;; arrive) newtemp=22;; *) error 'invalid_preset';; esac
+        for id in h1 h2 h3 h4; do uci -q set "heatbridge.$id.temp=$newtemp" || error 'save_failed'; done
+        uci commit heatbridge || error 'save_failed'
+        ;;
+      *) error 'invalid_action';;
+    esac
+    ;;
+  *) error 'invalid_method';;
+esac
+http_json
+printf '{"ok":true,"mode":"simulation","real_commands_sent":false,"heaters":['
+sep=''
+for id in h1 h2 h3 h4; do
+  name="$(readkey "$id" name "$id")"
+  temp="$(readkey "$id" temp 18)"
+  printf '%s{"id":"%s","name":"%s","temp":%s,"confirmed":false}' "$sep" "$id" "$(escape_json "$name")" "$temp"
+  sep=','
+done
+printf ']}\n'
