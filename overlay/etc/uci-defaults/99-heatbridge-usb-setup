@@ -20,6 +20,12 @@ while [ "$try" -lt 30 ] && [ -z "$CRED" ]; do
 done
 if [ -z "$CRED" ]; then logger -t DH-SETUP 'No USB key, Wi-Fi disabled'; exit 1; fi
 if ! grep -qx 'DACHA-V1' "$CRED"; then umount "$DIR" || true; exit 1; fi
+WIFI_SSID="$(sed -n 's/^WIFI_SSID=//p' "$CRED" | head -n 1 | tr -d '\r')"
+[ -n "$WIFI_SSID" ] || WIFI_SSID='DachaHeat-Setup'
+SSID_LEN="$(printf '%s' "$WIFI_SSID" | wc -c)"
+if [ "$SSID_LEN" -lt 1 ] || [ "$SSID_LEN" -gt 32 ]; then
+  logger -t DH-SETUP 'Invalid Wi-Fi SSID length'; umount "$DIR" || true; exit 1
+fi
 WIFI_PASS="$(sed -n 's/^WIFI_PSK=//p' "$CRED" | head -n 1 | tr -d '\r')"
 ROOT_HASH="$(sed -n 's/^ROOT_SHA512=//p' "$CRED" | head -n 1 | tr -d '\r')"
 WIFI_LEN="$(printf '%s' "$WIFI_PASS" | wc -c)"
@@ -39,7 +45,7 @@ uci set "wireless.$RADIO.disabled=0"
 uci set "wireless.$IFACE.device=$RADIO"
 uci set "wireless.$IFACE.mode=ap"
 uci set "wireless.$IFACE.network=lan"
-uci set "wireless.$IFACE.ssid=DachaHeat-Setup"
+uci set "wireless.$IFACE.ssid=$WIFI_SSID"
 uci set "wireless.$IFACE.encryption=psk2"
 uci set "wireless.$IFACE.key=$WIFI_PASS"
 uci set "wireless.$IFACE.disabled=0"
