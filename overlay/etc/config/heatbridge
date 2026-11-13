@@ -1,0 +1,24 @@
+config bridge 'main'
+	option mode 'simulation'
+	option protocol_verified '0'
+	option cloud_enabled '0'
+
+config heater 'h1'
+	option name 'Холл_Окно'
+	option temp '18'
+	option yandex_uuid '824fcae1-7f04-4df6-8711-1679699bbbf8'
+
+config heater 'h2'
+	option name 'Мансарда'
+	option temp '18'
+	option yandex_uuid 'cf99732e-fd15-42d8-9438-33d6cbfc5045'
+
+config heater 'h3'
+	option name 'Холл_Лестница'
+	option temp '18'
+	option yandex_uuid '953f2bc6-0847-4624-a0ed-730114d2b788'
+
+config heater 'h4'
+	option name 'Кухня'
+	option temp '18'
+	option yandex_uuid 'b81a4778-0d86-4a0b-b57f-4b8ab4ddacf1'
