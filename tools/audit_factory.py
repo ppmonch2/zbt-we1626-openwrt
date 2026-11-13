@@ -25,11 +25,11 @@ flash_limit=profile["file_size_limits"]["image"]
 size_ok=len(data)<=min(flash_limit,7333248)
 manifest=next(folder.glob("*.manifest")).read_text()
 packages=all(f"{p} " in manifest for p in
-             ("uhttpd","jsonfilter","kmod-usb-storage","kmod-fs-vfat",
+             ("uhttpd","jsonfilter",
               "kmod-usb-net-cdc-ether","wpad-basic-mbedtls"))
 unpacked=subprocess.run(["unsquashfs","-l","-o",str(sq_start),str(image)],capture_output=True,text=True)
 overlay_ok=unpacked.returncode==0 and all(x in unpacked.stdout for x in
-           ("www/heatbridge/index.html","etc/uci-defaults/99-heatbridge-usb-setup",
+           ("www/heatbridge/index.html","etc/uci-defaults/99-heatbridge-open-setup",
             "www/heatbridge/cgi-bin/api","etc/config/heatbridge",
             "etc/hotplug.d/net/90-dh-zte-wan"))
 results={
