@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dacha Heat Bridge · локальный контроллер</title>
+<style>
+body{font:16px system-ui,Arial,sans-serif;max-width:750px;margin:16px auto;padding:0 12px;background:#f7f7f7;color:#222}
+h1{font-size:22px}h2{font-size:17px}article{background:white;border:1px solid #ddd;border-radius:9px;padding:14px;margin:12px 0}
+button,input{font:inherit;padding:8px}button{cursor:pointer;margin:3px;border:1px solid #777;border-radius:5px}
+input[type=text]{max-width:190px;width:52%;border:1px solid #bbb;border-radius:4px}
+input[type=number]{width:70px;border:1px solid #bbb;border-radius:4px}
+#status{font-size:14px}.muted{color:#666;font-size:14px}
+</style></head><body>
+<h1>Dacha Heat Bridge</h1>
+<p><strong>Режим проверки.</strong> Настройки сохраняются на роутере. Команды реальным BALLU не отправляются до проверки протокола и авторизации.</p>
+<p id="status">Подключение к локальному серверу…</p>
+<div><button id="away">Уехал · 12 °C</button><button id="arrive">Еду на дачу · 22 °C</button><button id="refresh">Обновить</button></div>
+<div id="heaters"></div>
+<p class="muted">Значение «Задано» — запись в сервере, а не подтверждение нагрева. Интернет и HOMMYN не нужны для этого тестового экрана.</p>
+<script>
+'use strict';
+const area=document.getElementById('heaters'),status=document.getElementById('status');
+async function request(data){
+ const opts=data?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}:{};
+ const response=await fetch('cgi-bin/api',opts);if(!response.ok)throw Error('HTTP '+response.status);
+ const payload=await response.json();if(!payload.ok)throw Error(payload.error||'Ошибка');
+ return payload;
+}
+function view(data){
+ status.textContent=data.real_commands_sent?'Отправка команд включена':'Локальный сервер отвечает. Реальные команды отключены.';
+ area.replaceChildren();
+ data.heaters.forEach(h=>{
+  const card=document.createElement('article');
+  const title=document.createElement('h2');title.textContent=h.name;card.append(title);
+  const name=document.createElement('input');name.type='text';name.maxLength=32;name.value=h.name;name.setAttribute('aria-label','Имя обогревателя');
+  const temp=document.createElement('input');temp.type='number';temp.min='5';temp.max='30';temp.step='1';temp.value=h.temp;temp.setAttribute('aria-label','Температура');
+  const save=document.createElement('button');save.textContent='Сохранить';
+  save.onclick=async()=>{
+    const n=Number(temp.value);if(!Number.isInteger(n)||n<5||n>30){status.textContent='Допустимы только целые 5–30 °C';return;}
+    if(!name.value.trim()||name.value.length>32){status.textContent='Введите название до 32 символов';return;}
+    try{status.textContent='Сохраняю…';view(await request({action:'set',id:h.id,name:name.value.trim(),temp:n}));}
+    catch(e){status.textContent=e.message;}
+  };
+  card.append(name,document.createTextNode('  °C '),temp,save);
+  const note=document.createElement('p');note.className='muted';note.textContent='Не подтверждено физическим прибором';card.append(note);
+  area.append(card);
+ });
+}
+async function refresh(){try{view(await request())}catch(e){status.textContent='Ошибка: '+e.message;}}
+for(const [id,preset] of [['away','away'],['arrive','arrive']]){
+ document.getElementById(id).onclick=async()=>{try{view(await request({action:'mode',preset}))}catch(e){status.textContent='Ошибка: '+e.message;}};
+}
+document.getElementById('refresh').onclick=refresh;
+refresh();
+</script></body></html>
