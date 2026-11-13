@@ -16,7 +16,27 @@ make info > "$ROOT/output/profiles.txt"
 grep -Fq "$PROFILE" "$ROOT/output/profiles.txt" || { echo 'Device profile absent'; exit 1; }
 echo 'DO NOT FLASH: WE1626 hardware revision, bootloader, and initial install format unverified.' > "$ROOT/output/DO_NOT_FLASH.txt"
 echo 'Heat Bridge UI stores targets; real BALLU MQTT actuation DISABLED.' >> "$ROOT/output/DO_NOT_FLASH.txt"
-chmod +x "$ROOT/overlay/etc/uci-defaults/98-heatbridge" "$ROOT/overlay/www/heatbridge/cgi-bin/api" "$ROOT/overlay/usr/sbin/heatbridge-enable"
+# Unique first-boot WPA2 and admin passwords; DO NOT print them to public logs.
+SSID="DH-WE1626-$(openssl rand -hex 3)"
+WIFI_PASS="$(openssl rand -hex 12)"
+ROOT_PASS="$(openssl rand -hex 12)"
+ROOT_HASH="$(openssl passwd -6 "$ROOT_PASS")"
+FALLBACK="$ROOT/overlay/etc/uci-defaults/90-firstboot-wireless"
+sed -i -e "s|__DH_SSID__|$SSID|g" -e "s|__DH_WIFI_PASSWORD__|$WIFI_PASS|g" -e "s|__DH_ROOT_HASH__|$ROOT_HASH|g" "$FALLBACK"
+if grep -q '__DH_' "$FALLBACK"; then echo 'Unexpanded WLAN credential placeholder' >&2; exit 1; fi
+cat > "$ROOT/output/FIRST_BOOT_CREDENTIALS_PRIVATE_AFTER_DOWNLOAD.txt" <<EOF
+EXPERIMENTAL FIRMWARE - NOT APPROVED FOR FIRST FLASHING
+Both firmware images in this artifact use these same first-boot passwords.
+Wi-Fi SSID: $SSID
+Wi-Fi WPA2 password: $WIFI_PASS
+OpenWrt root login: root
+OpenWrt root password: $ROOT_PASS
+Router local address (planned): http://192.168.1.1/
+Heat Bridge LAN web UI (after enable by IT): http://192.168.1.1:8765/
+Store this file OFFLINE with EXACT image from this SAME GitHub Actions run.
+IMPORTANT: GitHub repository and Actions artifact are PUBLIC. Consider these passwords exposed; change BOTH after first successful login. No Internet exposure by default.
+EOF
+chmod +x "$FALLBACK" "$ROOT/overlay/etc/uci-defaults/98-heatbridge" "$ROOT/overlay/www/heatbridge/cgi-bin/api" "$ROOT/overlay/usr/sbin/heatbridge-enable"
 ok=0
 for variant in heat-lite heat-webui; do
   packages='kmod-usb2 kmod-usb-net-cdc-ether uhttpd jsonfilter mosquitto-nossl mosquitto-client-nossl'
