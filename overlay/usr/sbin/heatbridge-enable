@@ -3,6 +3,12 @@
 set -eu
 pw="$(awk -F: '$1=="root"{print $2}' /etc/shadow)"
 case "$pw" in ''|'!'|'*'|'!!') echo 'Set a non-empty root password using passwd first.' >&2; exit 1;; esac
+# NEVER expose Basic Auth Heat Bridge over temporary unencrypted Wi-Fi.
+# Require root password and WPA2/WPA3 encryption first.
+for iface in $(uci show wireless | sed -n 's/^wireless\.\([^.]*\)=wifi-iface$/\1/p'); do
+  enc="$(uci -q get "wireless.$iface.encryption" || true)"
+  [ "$enc" = none ] && { echo 'Secure Wi-Fi with WPA2/WPA3 in LuCI first.' >&2; exit 1; }
+done
 [ -f /etc/config/heatbridge ] || { echo 'Heatbridge configuration missing' >&2; exit 1; }
 uci -q get uhttpd.heatbridge >/dev/null || { echo 'Heatbridge uhttpd section missing' >&2; exit 1; }
 uci set uhttpd.heatbridge.disabled='0'
