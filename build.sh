@@ -16,12 +16,13 @@ make info > "$ROOT/output/profiles.txt"
 grep -Fq "$PROFILE" "$ROOT/output/profiles.txt" || { echo 'Device profile absent'; exit 1; }
 echo 'DO NOT FLASH: WE1626 hardware revision, bootloader, and initial install format unverified.' > "$ROOT/output/DO_NOT_FLASH.txt"
 echo 'Heat Bridge UI stores targets; real BALLU MQTT actuation DISABLED.' >> "$ROOT/output/DO_NOT_FLASH.txt"
+echo 'First boot requires a USER-OWNED FAT32 key with DACHA.TXT; no passwords in this public build.' >> "$ROOT/output/DO_NOT_FLASH.txt"
 # No password generation, storage or publication in public GitHub Actions.
 # Wi-Fi first boot remains disabled until a PRIVATE/offline provisioning mechanism exists.
-chmod +x "$ROOT/overlay/etc/uci-defaults/98-heatbridge" "$ROOT/overlay/www/heatbridge/cgi-bin/api" "$ROOT/overlay/usr/sbin/heatbridge-enable"
+chmod +x "$ROOT/overlay/etc/uci-defaults/98-heatbridge" "$ROOT/overlay/etc/uci-defaults/99-heatbridge-usb-setup" "$ROOT/overlay/www/heatbridge/cgi-bin/api" "$ROOT/overlay/usr/sbin/heatbridge-enable"
 ok=0
 for variant in heat-lite heat-webui; do
-  packages='kmod-usb2 kmod-usb-net-cdc-ether uhttpd jsonfilter mosquitto-nossl mosquitto-client-nossl'
+  packages='kmod-usb2 kmod-usb-net-cdc-ether kmod-usb-storage kmod-fs-vfat kmod-nls-cp437 kmod-nls-iso8859-1 uhttpd jsonfilter mosquitto-nossl mosquitto-client-nossl'
   if [[ "$variant" == heat-webui ]]; then packages="$packages luci"; fi
   mkdir -p "$ROOT/output/$variant"
   echo "Building $variant with $packages"
