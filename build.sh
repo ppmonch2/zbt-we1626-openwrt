@@ -47,5 +47,30 @@ for variant in heat-lite heat-webui; do
     tail -n 25 "$ROOT/output/$variant.log" || true
   fi
 done
+# Experimental factory format for the OEM identification in the installed NDMS:
+# ZyXEL Keenetic Omni II, not the physical ZBT board revision.
+VENDOR_PROFILE=zyxel_keenetic-omni-ii
+VENDOR_DIR="$ROOT/output/omni2-firstflash"
+mkdir -p "$VENDOR_DIR"
+vendor_ok=0
+echo 'Attempting OEM-compatible FACTORY format (board identity NOT verified)'
+if make image PROFILE="$VENDOR_PROFILE" PACKAGES='kmod-usb2 kmod-usb-net-cdc-ether kmod-usb-storage kmod-fs-vfat kmod-nls-cp437 kmod-nls-iso8859-1 uhttpd jsonfilter mosquitto-nossl mosquitto-client-nossl' FILES="$ROOT/overlay" DISABLED_SERVICES="mosquitto" BIN_DIR="$VENDOR_DIR" > "$ROOT/output/omni2-firstflash.log" 2>&1; then
+  for bin in "$VENDOR_DIR/"*squashfs-factory.bin; do
+    [[ -f "$bin" ]] || continue
+    bytes="$(stat -c '%s' "$bin")"
+    echo "omni2-firstflash: $bytes bytes; OEM factory format, unverified on ZBT" | tee -a "$ROOT/output/sizes.txt"
+    if (( bytes <= 7333248 )); then
+      sha256sum "$bin" >> "$ROOT/output/SHA256SUMS"
+      vendor_ok=1
+    else
+      echo 'Factory image exceeds conservative 7,333,248-byte ceiling; removing candidate' >&2
+      rm -f "$bin"
+    fi
+  done
+else
+  echo 'OEM factory variant failed; see omni2-firstflash.log' | tee -a "$ROOT/output/sizes.txt"
+  tail -n 35 "$ROOT/output/omni2-firstflash.log" || true
+fi
+if ((vendor_ok==0)); then echo 'No viable OEM-format factory image generated' >&2; exit 1; fi
 if ((ok==0)); then echo 'No size-compliant candidates built' >&2; exit 1; fi
 echo 'Images include Heat Bridge local server and MQTT binaries. NOT approved for first flashing.'
