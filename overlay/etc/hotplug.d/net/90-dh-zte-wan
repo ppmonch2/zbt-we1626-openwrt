@@ -2,16 +2,17 @@
 # Read-only USB identity check; automatically select ZTE CDC Ethernet device for WAN.
 # Does not change firewall if private USB provisioning has not been completed.
 [ "$ACTION" = "add" ] || exit 0
-[ -n "$INTERFACE" ] || exit 0
-case "$INTERFACE" in usb*|eth*) ;; *) exit 0;; esac
-[ -d "/sys/class/net/$INTERFACE" ] || exit 0
-driver="$(readlink -f "/sys/class/net/$INTERFACE/device/driver" 2>/dev/null || true)"
+DEV="${DEVICENAME:-${INTERFACE:-}}"
+[ -n "$DEV" ] || exit 0
+case "$DEV" in usb*|eth*) ;; *) exit 0;; esac
+[ -d "/sys/class/net/$DEV" ] || exit 0
+driver="$(readlink -f "/sys/class/net/$DEV/device/driver" 2>/dev/null || true)"
 case "$driver" in */cdc_ether|*/rndis_host|*/cdc_ncm) ;; *) exit 0;; esac
 uci -q get network.wanusb >/dev/null 2>&1 || exit 0
 previous="$(uci -q get network.wanusb.device || true)"
-[ "$previous" = "$INTERFACE" ] && exit 0
-uci set "network.wanusb.device=$INTERFACE" || exit 0
+[ "$previous" = "$DEV" ] && exit 0
+uci set "network.wanusb.device=$DEV" || exit 0
 uci commit network || exit 0
-logger -t DH-MODEM "USB Ethernet $INTERFACE recognized, WAN interface updated"
+logger -t DH-MODEM "USB Ethernet $DEV recognized, WAN interface updated"
 ifup wanusb >/dev/null 2>&1 || true
 exit 0
