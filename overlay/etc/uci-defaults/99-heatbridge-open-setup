@@ -1,0 +1,41 @@
+#!/bin/sh
+# First boot, phone-only access: open temporary Wi-Fi, stock LuCI at 192.168.1.1.
+# SECURITY: setup network has NO Wi-Fi password; do not enable WAN until root password
+# and WPA2/WPA3 Wi-Fi security have been set by the owner from LuCI.
+set -eu
+if [ ! -s /etc/config/wireless ]; then
+  wifi config >/etc/config/wireless
+fi
+RADIO="$(uci show wireless | sed -n 's/^wireless\.\([^.]*\)=wifi-device$/\1/p' | head -n 1)"
+[ -n "$RADIO" ] || { logger -t DH-WIFI 'Radio missing. Need wired recovery.'; exit 1; }
+IFACE="$(uci show wireless | sed -n 's/^wireless\.\([^.]*\)=wifi-iface$/\1/p' | head -n 1)"
+[ -n "$IFACE" ] || IFACE="$(uci add wireless wifi-iface)"
+uci set "wireless.$RADIO.disabled=0"
+uci set "wireless.$IFACE.device=$RADIO"
+uci set "wireless.$IFACE.mode=ap"
+uci set "wireless.$IFACE.network=lan"
+uci set "wireless.$IFACE.ssid=DachaHeat-Setup"
+uci set "wireless.$IFACE.encryption=none"
+uci -q delete "wireless.$IFACE.key" || true
+uci set "wireless.$IFACE.disabled=0"
+uci commit wireless
+
+# ZTE USB CDC-Ethernet profile intentionally disabled until user secures Wi-Fi.
+# On later setup: LuCI -> Network -> Interfaces -> wanusb -> enable.
+uci -q delete network.wanusb || true
+uci set network.wanusb=interface
+uci set network.wanusb.device=usb0
+uci set network.wanusb.proto=dhcp
+uci set network.wanusb.disabled=1
+uci set network.wanusb.metric=10
+uci commit network
+for zone in $(uci show firewall | sed -n 's/^firewall\.\([^.]*\)=zone$/\1/p'); do
+  [ "$(uci -q get "firewall.$zone.name")" = wan ] || continue
+  uci -q add_list "firewall.$zone.network=wanusb" || true
+done
+uci commit firewall
+
+# Keep Dacha Heat Bridge separate and disabled until password set.
+# Do NOT change root credentials; OpenWrt initial blank-password setup via LuCI.
+logger -t DH-WIFI 'OPEN temporary setup Wi-Fi ready; WAN and Heat Bridge disabled'
+exit 0
