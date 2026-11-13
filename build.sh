@@ -16,13 +16,13 @@ make info > "$ROOT/output/profiles.txt"
 grep -Fq "$PROFILE" "$ROOT/output/profiles.txt" || { echo 'Device profile absent'; exit 1; }
 echo 'DO NOT FLASH: WE1626 hardware revision, bootloader, and initial install format unverified.' > "$ROOT/output/DO_NOT_FLASH.txt"
 echo 'Heat Bridge UI stores targets; real BALLU MQTT actuation DISABLED.' >> "$ROOT/output/DO_NOT_FLASH.txt"
-echo 'First boot requires a USER-OWNED FAT32 key with DACHA.TXT; no passwords in this public build.' >> "$ROOT/output/DO_NOT_FLASH.txt"
+echo 'Open first-boot Wi-Fi DachaHeat-Setup, no password; ZTE WAN and Heat Bridge disabled until owner secures LuCI.' >> "$ROOT/output/DO_NOT_FLASH.txt"
 # No password generation, storage or publication in public GitHub Actions.
-# Wi-Fi first boot remains disabled until a PRIVATE/offline provisioning mechanism exists.
-chmod +x "$ROOT/overlay/etc/uci-defaults/98-heatbridge" "$ROOT/overlay/etc/uci-defaults/99-heatbridge-usb-setup" "$ROOT/overlay/www/heatbridge/cgi-bin/api" "$ROOT/overlay/usr/sbin/heatbridge-enable"
+# First boot uses an open temporary Wi-Fi setup AP; no credentials embedded.
+chmod +x "$ROOT/overlay/etc/uci-defaults/98-heatbridge" "$ROOT/overlay/etc/uci-defaults/99-heatbridge-open-setup" "$ROOT/overlay/www/heatbridge/cgi-bin/api" "$ROOT/overlay/usr/sbin/heatbridge-enable"
 ok=0
 for variant in heat-lite heat-webui; do
-  packages='kmod-usb2 kmod-usb-net-cdc-ether kmod-usb-storage kmod-fs-vfat kmod-nls-cp437 kmod-nls-iso8859-1 uhttpd jsonfilter mosquitto-nossl mosquitto-client-nossl'
+  packages='kmod-usb2 kmod-usb-net-cdc-ether uhttpd jsonfilter mosquitto-nossl mosquitto-client-nossl'
   if [[ "$variant" == heat-webui ]]; then packages="$packages luci"; fi
   mkdir -p "$ROOT/output/$variant"
   echo "Building $variant with $packages"
@@ -54,7 +54,7 @@ VENDOR_DIR="$ROOT/output/omni2-firstflash"
 mkdir -p "$VENDOR_DIR"
 vendor_ok=0
 echo 'Attempting OEM-compatible FACTORY format (board identity NOT verified)'
-if make image PROFILE="$VENDOR_PROFILE" PACKAGES='kmod-usb2 kmod-usb-net-cdc-ether kmod-usb-storage kmod-fs-vfat kmod-nls-cp437 kmod-nls-iso8859-1 uhttpd jsonfilter mosquitto-nossl mosquitto-client-nossl' FILES="$ROOT/overlay" DISABLED_SERVICES="mosquitto" BIN_DIR="$VENDOR_DIR" > "$ROOT/output/omni2-firstflash.log" 2>&1; then
+if make image PROFILE="$VENDOR_PROFILE" PACKAGES='kmod-usb2 kmod-usb-net-cdc-ether uhttpd jsonfilter mosquitto-nossl mosquitto-client-nossl' FILES="$ROOT/overlay" DISABLED_SERVICES="mosquitto" BIN_DIR="$VENDOR_DIR" > "$ROOT/output/omni2-firstflash.log" 2>&1; then
   for bin in "$VENDOR_DIR/"*squashfs-factory.bin; do
     [[ -f "$bin" ]] || continue
     bytes="$(stat -c '%s' "$bin")"
@@ -74,7 +74,7 @@ fi
 # Optional Omni II FACTORY build with LuCI for Android-only post-install WAN setup.
 VENDOR_WEB_DIR="$ROOT/output/omni2-firstflash-webui"
 mkdir -p "$VENDOR_WEB_DIR"
-if make image PROFILE="$VENDOR_PROFILE" PACKAGES='kmod-usb2 kmod-usb-net-cdc-ether kmod-usb-storage kmod-fs-vfat kmod-nls-cp437 kmod-nls-iso8859-1 uhttpd jsonfilter mosquitto-nossl mosquitto-client-nossl luci' FILES="$ROOT/overlay" DISABLED_SERVICES="mosquitto" BIN_DIR="$VENDOR_WEB_DIR" > "$ROOT/output/omni2-firstflash-webui.log" 2>&1; then
+if make image PROFILE="$VENDOR_PROFILE" PACKAGES='kmod-usb2 kmod-usb-net-cdc-ether uhttpd jsonfilter mosquitto-nossl mosquitto-client-nossl luci' FILES="$ROOT/overlay" DISABLED_SERVICES="mosquitto" BIN_DIR="$VENDOR_WEB_DIR" > "$ROOT/output/omni2-firstflash-webui.log" 2>&1; then
   for bin in "$VENDOR_WEB_DIR/"*squashfs-factory.bin; do
     [[ -f "$bin" ]] || continue
     bytes="$(stat -c '%s' "$bin")"
