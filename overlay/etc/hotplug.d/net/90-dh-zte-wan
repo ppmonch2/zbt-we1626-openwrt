@@ -1,6 +1,6 @@
 #!/bin/sh
 # Read-only USB identity check; automatically select ZTE CDC Ethernet device for WAN.
-# Does not change firewall if private USB provisioning has not been completed.
+# Only activate the USB WAN after the owner enables it in LuCI. Setup Wi-Fi is open.
 [ "$ACTION" = "add" ] || exit 0
 DEV="${DEVICENAME:-${INTERFACE:-}}"
 [ -n "$DEV" ] || exit 0
@@ -9,6 +9,10 @@ case "$DEV" in usb*|eth*) ;; *) exit 0;; esac
 driver="$(readlink -f "/sys/class/net/$DEV/device/driver" 2>/dev/null || true)"
 case "$driver" in */cdc_ether|*/rndis_host|*/cdc_ncm) ;; *) exit 0;; esac
 uci -q get network.wanusb >/dev/null 2>&1 || exit 0
+# Do not activate WAN while first-boot open setup AP has no admin password.
+[ "$(uci -q get network.wanusb.disabled || true)" = 1 ] && exit 0
+root_hash="$(awk -F: '$1=="root" { print $2; exit }' /etc/shadow)"
+case "$root_hash" in ''|'!'|'*'|'!!') exit 0;; esac
 previous="$(uci -q get network.wanusb.device || true)"
 [ "$previous" = "$DEV" ] && exit 0
 uci set "network.wanusb.device=$DEV" || exit 0
