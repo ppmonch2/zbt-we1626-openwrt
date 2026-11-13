@@ -19,7 +19,7 @@ echo 'Heat Bridge UI stores targets; real BALLU MQTT actuation DISABLED.' >> "$R
 chmod +x "$ROOT/overlay/etc/uci-defaults/98-heatbridge" "$ROOT/overlay/www/heatbridge/cgi-bin/api" "$ROOT/overlay/usr/sbin/heatbridge-enable"
 ok=0
 for variant in heat-lite heat-webui; do
-  packages='kmod-usb2 kmod-usb-net-cdc-ether uhttpd jsonfilter mosquitto-ssl mosquitto-client-ssl'
+  packages='kmod-usb2 kmod-usb-net-cdc-ether uhttpd jsonfilter mosquitto-nossl mosquitto-client-nossl'
   if [[ "$variant" == heat-webui ]]; then packages="$packages luci"; fi
   mkdir -p "$ROOT/output/$variant"
   echo "Building $variant with $packages"
