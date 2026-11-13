@@ -15,7 +15,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install builder tools
-        run: sudo apt-get update && sudo apt-get install -y zstd make curl ca-certificates
+        run: sudo apt-get update && sudo apt-get install -y zstd make curl ca-certificates squashfs-tools
+      - name: Validate embedded server scripts
+        run: |
+          bash -n build.sh
+          sh -n overlay/etc/uci-defaults/98-heatbridge
+          sh -n overlay/usr/sbin/heatbridge-enable
+          sh -n overlay/www/heatbridge/cgi-bin/api
+          python3 - <<'PY'
+          from pathlib import Path
+          html=Path('overlay/www/heatbridge/index.html').read_text()
+          assert "real_commands_sent" in html
+          assert "<script>" in html and "</script>" in html
+          Path('/tmp/heatbridge-ui.js').write_text(html.split('<script>',1)[1].split('</script>',1)[0])
+          PY
+          node --check /tmp/heatbridge-ui.js
       - name: Build experimental candidates without secrets
         run: bash ./build.sh
       - name: Validate image headers, driver inclusion and flash-size limits
