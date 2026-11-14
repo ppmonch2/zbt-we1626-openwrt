@@ -35,7 +35,7 @@ readelf -h "$bundle/heatbridge-entware/bin/heatbridge-syncleo" > "$out/native-el
 readelf -l "$bundle/heatbridge-entware/bin/heatbridge-syncleo" > "$out/native-segments.txt"
 ! grep -q INTERP "$out/native-segments.txt"
 [[ $(stat -c %s "$bundle/heatbridge-entware/bin/heatbridge-syncleo") -lt 1048576 ]]
-cp "$root/entware/bin/heatbridge-device" "$bundle/heatbridge-entware/bin/"
+cp "$root/entware/bin/heatbridge-device" "$root/entware/bin/heatbridge-public-permissions" "$bundle/heatbridge-entware/bin/"
 cp "$root/entware/install.sh" "$bundle/heatbridge-entware/"
 cp -R "$root/entware/www" "$root/entware/init.d" "$bundle/heatbridge-entware/"
 cp "$root/entware/README_RU.md" "$bundle/README_RU.md"

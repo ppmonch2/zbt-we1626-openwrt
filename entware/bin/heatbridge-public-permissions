@@ -1,0 +1,8 @@
+#!/opt/bin/sh
+# uhttpd checks S_IROTH even when its process is root. Never change secret files.
+set -eu
+base="${HEATBRIDGE_PREFIX:-/opt}"
+web="$base/share/heatbridge/www"
+chmod 755 "$base/share/heatbridge" "$web" "$web/cgi-bin"
+chmod 644 "$web/index.html" "$web/app.js" "$web/style.css"
+chmod 755 "$web/cgi-bin/api"

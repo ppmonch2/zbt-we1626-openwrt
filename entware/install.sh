@@ -37,11 +37,12 @@ if [ ! -f /opt/etc/heatbridge/config.json ]; then
   h4:{name:"Кухня",temp:18,verified:false}}}' > /opt/etc/heatbridge/config.json
 fi
 chmod 600 /opt/etc/heatbridge/config.json
-cp "$here/bin/heatbridge-device" /opt/bin/
+cp "$here/bin/heatbridge-device" "$here/bin/heatbridge-public-permissions" /opt/bin/
 cp "$here/bin/heatbridge-syncleo" /opt/libexec/
 cp "$here/init.d/S80heatbridge" /opt/etc/init.d/
 cp -R "$here/www" /opt/share/heatbridge/
-chmod 755 /opt/bin/heatbridge-device /opt/libexec/heatbridge-syncleo /opt/etc/init.d/S80heatbridge /opt/share/heatbridge/www/cgi-bin/api
+chmod 755 /opt/bin/heatbridge-device /opt/bin/heatbridge-public-permissions /opt/libexec/heatbridge-syncleo /opt/etc/init.d/S80heatbridge /opt/share/heatbridge/www/cgi-bin/api
+/opt/bin/heatbridge-public-permissions
 if [ ! -s /opt/etc/heatbridge/httpd.conf ]; then
  echo 'Choose a NEW password for the local web user heatbridge (12+ characters).'
  # A terminal is mandatory so credentials cannot accidentally come from a download pipe.

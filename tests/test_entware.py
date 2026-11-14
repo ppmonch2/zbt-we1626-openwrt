@@ -81,3 +81,20 @@ class MdnsParserTest(unittest.TestCase):
   for data in [b'\xc0\x00',b'\x05ab',b'\xc0',b'\x40abc']:
    pos=ctypes.c_int(0);out=ctypes.create_string_buffer(100)
    self.assertEqual(self.lib.parse(data,len(data),ctypes.byref(pos),out,len(out)),0)
+
+class PublicPermissionsTest(unittest.TestCase):
+ def test_strict_umask_install_becomes_readable_without_exposing_secrets(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp);web=root/'share/heatbridge/www';(web/'cgi-bin').mkdir(parents=True)
+   private=root/'etc/heatbridge';private.mkdir(parents=True);private.chmod(0o700)
+   secret=private/'config.json';secret.write_text('{"token":"private"}');secret.chmod(0o600)
+   for name in ['index.html','app.js','style.css','cgi-bin/api']:
+    p=web/name;p.write_text('fixture');p.chmod(0o600)
+   for p in [web,web/'cgi-bin',web.parent]:p.chmod(0o700)
+   subprocess.run(['sh',str(ROOT/'entware/bin/heatbridge-public-permissions')],
+                  env=dict(os.environ,HEATBRIDGE_PREFIX=tmp),check=True)
+   for name in ['index.html','app.js','style.css']:
+    self.assertEqual((web/name).stat().st_mode&0o777,0o644)
+   self.assertEqual((web/'cgi-bin/api').stat().st_mode&0o777,0o755)
+   self.assertEqual(secret.stat().st_mode&0o777,0o600)
+   self.assertEqual(private.stat().st_mode&0o777,0o700)
