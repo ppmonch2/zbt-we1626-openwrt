@@ -1,0 +1,59 @@
+name: Publish tested Entware download
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/publish-entware.yml
+permissions:
+  contents: read
+concurrency:
+  group: entware-release-0.1.0
+  cancel-in-progress: false
+jobs:
+  publish-tested-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and package the successful USB artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-files unpacked
+          gh api repos/$GH_REPO/actions/artifacts/14109019410/zip > release-files/Ballu-Entware-USB-0.1.0.zip
+          printf '%s  %s\n' d1c94cf87ce151c922b033fcaab2ea2bc2463641a9ad8cc37031e685c0446fd3 release-files/Ballu-Entware-USB-0.1.0.zip | sha256sum -c -
+          python3 - <<'PY'
+          from pathlib import Path, PurePosixPath
+          import stat, zipfile
+          with zipfile.ZipFile('release-files/Ballu-Entware-USB-0.1.0.zip') as archive:
+              assert archive.testzip() is None
+              for entry in archive.infolist():
+                  path = PurePosixPath(entry.filename)
+                  assert not path.is_absolute() and '..' not in path.parts
+                  assert not stat.S_ISLNK(entry.external_attr >> 16)
+                  assert path.parts[0] in {'heatbridge-entware','install','README_RU.md','USB_SHA256SUMS'}
+              archive.extractall('unpacked')
+          PY
+          (cd unpacked/heatbridge-entware && sha256sum -c SHA256SUMS)
+          tar -czf release-files/Ballu-Entware-App-0.1.0.tar.gz -C unpacked heatbridge-entware
+          (cd release-files && sha256sum Ballu-Entware-App-0.1.0.tar.gz Ballu-Entware-USB-0.1.0.zip > SHA256SUMS)
+      - name: Publish preliminary hardware-test package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view ballu-entware-v0.1.0 >/dev/null 2>&1; then
+            echo 'This version already exists; refusing to replace published files.'
+            exit 1
+          fi
+          gh release create ballu-entware-v0.1.0 release-files/* \
+            --target f66e22db391a4fc620469993f1f2b0c4a26a86f8 \
+            --title 'Ballu on Keenetic Entware 0.1.0 — hardware test' \
+            --prerelease --notes-file entware/RELEASE_NOTES.md
