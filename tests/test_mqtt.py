@@ -110,7 +110,7 @@ else:
         self.write_config()
         script = (ROOT / 'overlay/www/heatbridge/cgi-bin/api').read_text()
         script = script.replace("export PATH='/usr/sbin:/usr/bin:/sbin:/bin'", '')
-        script = script.replace('/usr/sbin/heatbridge-mqtt', str(self.path / 'transport'))
+        script = script.replace('/usr/sbin/heatbridge-"$mode"', str(self.path / 'transport'))
         (self.path / 'transport').write_text(
             (ROOT / 'overlay/usr/sbin/heatbridge-mqtt').read_text())
         (self.path / 'transport').chmod(0o755)
@@ -149,6 +149,6 @@ else:
         with tarfile.open(ROOT / 'output-custom/heatbridge-app.tar.gz') as tar:
             names = tar.getnames()
             self.assertIn('usr/sbin/heatbridge-mqtt', names)
-            self.assertTrue(all(n.startswith(('www/heatbridge/', 'usr/sbin/heatbridge-'))
+            self.assertTrue(all(n.startswith(('www/heatbridge/', 'usr/sbin/heatbridge-')) or n == 'usr/bin/heatbridge-syncleo'
                                 for n in names))
             self.assertFalse(any('..' in Path(n).parts or n.startswith('/') for n in names))

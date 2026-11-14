@@ -1,0 +1,33 @@
+#!/bin/sh
+# Secret connection fields travel on stdin, not in command-line arguments.
+set -eu
+get() { uci -q get "heatbridge.$1.$2" 2>/dev/null || true; }
+action="${1:-}"; id="${2:-}"; value="${3:-}"
+case "$id" in h1|h2|h3|h4) ;; *) exit 1;; esac
+[ "$(get main mode)" = syncleo ] || exit 1
+case "$action" in
+  read) ;;
+  send)
+    [ "$(get "$id" protocol_verified)" = 1 ] || exit 1
+    case "$value" in ''|*[!0-9]*) exit 1;; esac
+    [ "$value" -ge 5 ] && [ "$value" -le 30 ] || exit 1
+    ;;
+  *) exit 1;;
+esac
+# One session per heater; simultaneous clients may invalidate a device session.
+mkdir -p /var/run/heatbridge
+lock="/var/run/heatbridge/$id.lock"
+mkdir "$lock" 2>/dev/null || { echo heater_busy >&2; exit 1; }
+trap 'rmdir "$lock" 2>/dev/null || true' EXIT
+trap 'exit 1' HUP INT TERM
+settings() {
+  get "$id" ip; get "$id" port; get "$id" public_key; get "$id" token
+}
+if [ "$action" = send ]; then
+  settings | /usr/bin/heatbridge-syncleo set "$value"
+else
+  result="$(settings | /usr/bin/heatbridge-syncleo read)" || exit 1
+  target="$(jsonfilter -s "$result" -e '@.reported_target')"
+  case "$target" in ''|null) echo no_target_report >&2; exit 1;; esac
+  printf '%s\n' "$target"
+fi

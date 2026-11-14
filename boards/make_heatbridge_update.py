@@ -9,7 +9,8 @@ output = root / 'output-custom'
 output.mkdir(exist_ok=True)
 archive = output / 'heatbridge-app.tar.gz'
 paths = [root / 'overlay/www/heatbridge', root / 'overlay/usr/sbin/heatbridge-mqtt',
-         root / 'overlay/usr/sbin/heatbridge-discover']
+         root / 'overlay/usr/sbin/heatbridge-discover',
+         root / 'overlay/usr/sbin/heatbridge-syncleo']
 with tarfile.open(archive, 'w:gz') as tar:
     for path in paths:
         for item in ([path] if path.is_file() else sorted(path.rglob('*'))):
@@ -21,6 +22,14 @@ with tarfile.open(archive, 'w:gz') as tar:
             info.mode = 0o755 if '/cgi-bin/' in str(item) or '/sbin/' in str(item) else 0o644
             with item.open('rb') as stream:
                 tar.addfile(info, stream)
+    native = output / 'heatbridge-syncleo'
+    if native.is_file():
+        info = tar.gettarinfo(str(native), arcname='usr/bin/heatbridge-syncleo')
+        info.uid = info.gid = 0
+        info.uname = info.gname = 'root'
+        info.mode = 0o755
+        with native.open('rb') as stream:
+            tar.addfile(info, stream)
 (output / 'heatbridge-app.sha256').write_text(
     hashlib.sha256(archive.read_bytes()).hexdigest() + '  ' + archive.name + '\n')
 print(archive)

@@ -8,6 +8,8 @@ cd "$WORK"
 git clone --filter=blob:none --branch v25.12.6 --depth 1 https://github.com/openwrt/openwrt.git openwrt-src
 python3 boards/patch_openwrt.py openwrt-src
 cd openwrt-src
+mkdir -p package/heatbridge-syncleo
+cp -a "$WORK/native/syncleo/." package/heatbridge-syncleo/
 ./scripts/feeds update -a
 ./scripts/feeds install -a
 mkdir -p files
@@ -21,11 +23,8 @@ CONFIG_TARGET_ramips_mt7620_DEVICE_zbtlink_zbt-we1626-ndms=y
 CONFIG_PACKAGE_luci=y
 CONFIG_PACKAGE_uhttpd=y
 CONFIG_PACKAGE_jsonfilter=y
-CONFIG_PACKAGE_mosquitto-ssl=y
-CONFIG_PACKAGE_mosquitto-client-ssl=y
-CONFIG_PACKAGE_ca-bundle=y
+CONFIG_PACKAGE_heatbridge-syncleo=y
 CONFIG_PACKAGE_umdns=y
-CONFIG_PACKAGE_tcpdump-mini=y
 CONFIG_PACKAGE_kmod-usb2=y
 CONFIG_PACKAGE_kmod-usb-ohci=y
 CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y
@@ -38,7 +37,11 @@ grep -q '^CONFIG_TARGET_ramips_mt7620_DEVICE_zbtlink_zbt-we1626-ndms=y$' .config
 }
 echo 'Building for preliminary MT7620N / NDMS 0x720000 flash map. Nothing approved for flashing.'
 make download -j4
-make -j4 V=s
+mkdir -p "$WORK/output-custom"
+if ! make -j4 V=s > "$WORK/output-custom/build.log" 2>&1; then
+  tail -n 160 "$WORK/output-custom/build.log"
+  exit 1
+fi
 mkdir -p "$WORK/output-custom"
 cp -av bin/targets/ramips/mt7620/*zbt-we1626-ndms* "$WORK/output-custom/" || true
 cp -av bin/targets/ramips/mt7620/profiles.json "$WORK/output-custom/" || true
@@ -48,6 +51,7 @@ if ! find "$WORK/output-custom" -name '*squashfs-factory.bin' -print -quit | gre
   exit 1
 fi
 cp "$WORK/docs/BALLU_SETUP_RU.md" "$WORK/output-custom/"
+find build_dir -type f -path '*/heatbridge-syncleo/heatbridge-syncleo' -exec cp {} "$WORK/output-custom/heatbridge-syncleo" \;
 python3 "$WORK/boards/make_heatbridge_update.py"
 echo 'DO NOT FLASH: factory acceptance, MT7620N and Ethernet GPIO remain unverified.' > "$WORK/output-custom/DO_NOT_FLASH.txt"
 echo 'Flash 0x50000..0x770000 only; reserve NDMS Config and Storage until factory backup.' >> "$WORK/output-custom/DO_NOT_FLASH.txt"

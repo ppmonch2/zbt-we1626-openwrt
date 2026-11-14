@@ -25,15 +25,15 @@ async function request(data){
  return payload;
 }
 function view(data){
- document.getElementById('transport').textContent=data.mode==='mqtt'?'Управление через настроенный MQTT.':'Режим проверки: команды приборам отключены. Сначала настройте связь.';
- status.textContent=data.heaters.some(h=>h.delivery==='failed')?'Часть команд не отправлена. Смотрите состояние каждого прибора.':data.real_commands_sent?'Команды опубликованы в MQTT. Принятие приборами ещё не подтверждено.':'Локальный сервер отвечает.';
+ document.getElementById('transport').textContent=data.mode!=='simulation'?'Управление через '+(data.mode==='syncleo'?'локальный Syncleo.':'настроенный MQTT.'):'Режим проверки: команды приборам отключены. Сначала настройте связь.';
+ status.textContent=data.heaters.some(h=>h.delivery==='failed')?'Часть команд не отправлена. Смотрите состояние каждого прибора.':data.real_commands_sent?'Команды переданы через настроенное соединение. Нагрев ещё не подтверждён.':'Локальный сервер отвечает.';
  area.replaceChildren();
  data.heaters.forEach(h=>{
   const card=document.createElement('article');
   const title=document.createElement('h2');title.textContent=h.name;card.append(title);
   const name=document.createElement('input');name.type='text';name.maxLength=32;name.value=h.name;name.setAttribute('aria-label','Имя обогревателя');
   const temp=document.createElement('input');temp.type='number';temp.min='5';temp.max='30';temp.step='1';temp.value=h.temp;temp.setAttribute('aria-label','Температура');
-  const save=document.createElement('button');save.textContent=data.mode==='mqtt'?'Отправить':'Сохранить для проверки';
+  const save=document.createElement('button');save.textContent=data.mode!=='simulation'?'Отправить':'Сохранить для проверки';
   save.onclick=async()=>{
     const n=Number(temp.value);if(!Number.isInteger(n)||n<5||n>30){status.textContent='Допустимы только целые 5–30 °C';return;}
     if(!name.value.trim()||name.value.length>32){status.textContent='Введите название до 32 символов';return;}
@@ -41,7 +41,7 @@ function view(data){
     catch(e){status.textContent=e.message;}
   };
   card.append(name,document.createTextNode('  °C '),temp,save);
-  const note=document.createElement('p');note.className='muted';note.textContent=h.delivery==='failed'?'Ошибка отправки: проверьте подключение и настройки MQTT.':h.reported_target!=null?'Свежая уставка от прибора: '+h.reported_target+' °C (не подтверждает нагрев).':h.delivery==='published'?'Опубликовано. Ожидает проверки на приборе.':'Свежих данных от прибора нет.';card.append(note);
+  const note=document.createElement('p');note.className='muted';note.textContent=h.delivery==='failed'?'Ошибка отправки: проверьте подключение и настройки связи.':h.reported_target!=null?'Свежая уставка от прибора: '+h.reported_target+' °C (не подтверждает нагрев).':h.delivery==='published'?'Опубликовано. Ожидает проверки на приборе.':'Свежих данных от прибора нет.';card.append(note);
   area.append(card);
  });
 }
@@ -50,7 +50,7 @@ for(const [id,preset] of [['away','away'],['arrive','arrive']]){
  document.getElementById(id).onclick=async()=>{try{view(await request({action:'mode',preset}))}catch(e){status.textContent='Ошибка: '+e.message;}};
 }
 document.getElementById('refresh').onclick=refresh;
-document.getElementById('probe').onclick=async()=>{try{status.textContent='Ожидаю свежие данные, до 8 секунд…';view(await request({action:'probe'}))}catch(e){status.textContent=e.message;}};
+document.getElementById('probe').onclick=async()=>{try{status.textContent='Ожидаю свежие данные, до 25 секунд…';view(await request({action:'probe'}))}catch(e){status.textContent=e.message;}};
 refresh();
 </script></body></html>
 

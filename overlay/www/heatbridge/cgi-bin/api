@@ -7,13 +7,13 @@ error() { http_json; printf '{"ok":false,"error":"%s"}\n' "$1"; exit 0; }
 escape_json() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 readkey() { uci -q get "heatbridge.$1.$2" 2>/dev/null || printf '%s' "$3"; }
 mode="$(readkey main mode simulation)"
-case "$mode" in simulation|mqtt) ;; *) error invalid_transport;; esac
+case "$mode" in simulation|mqtt|syncleo) ;; *) error invalid_transport;; esac
 sent=false
 command_ids=''
 failed_ids=''
 send_target() {
-  [ "$mode" = mqtt ] || return 0
-  if /usr/sbin/heatbridge-mqtt send "$1" "$2" >/dev/null 2>&1; then
+  [ "$mode" = simulation ] && return 0
+  if /usr/sbin/heatbridge-"$mode" send "$1" "$2" >/dev/null 2>&1; then
     sent=true
     command_ids="$command_ids $1"
     return 0
@@ -74,8 +74,8 @@ for id in h1 h2 h3 h4; do
   case " $command_ids " in *" $id "*) delivery=published;; esac
   case " $failed_ids " in *" $id "*) delivery=failed;; esac
   reported=null
-  if [ "${action:-}" = probe ] && [ "$mode" = mqtt ]; then
-    reported="$(/usr/sbin/heatbridge-mqtt read "$id" 2>/dev/null)" || reported=null
+  if [ "${action:-}" = probe ] && [ "$mode" != simulation ]; then
+    reported="$(/usr/sbin/heatbridge-"$mode" read "$id" 2>/dev/null)" || reported=null
   fi
   printf '%s{"id":"%s","name":"%s","temp":%s,"confirmed":false,"delivery":"%s","reported_target":%s}' "$sep" "$id" "$(escape_json "$name")" "$temp" "$delivery" "$reported"
   sep=','
