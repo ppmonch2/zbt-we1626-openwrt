@@ -16,13 +16,14 @@ make info > "$ROOT/output/profiles.txt"
 grep -Fq "$PROFILE" "$ROOT/output/profiles.txt" || { echo 'Device profile absent'; exit 1; }
 echo 'DO NOT FLASH: WE1626 hardware revision, bootloader, and initial install format unverified.' > "$ROOT/output/DO_NOT_FLASH.txt"
 echo 'Heat Bridge UI stores targets; real BALLU MQTT actuation DISABLED.' >> "$ROOT/output/DO_NOT_FLASH.txt"
+echo 'ZTE 19d2:1225 needs mode switching to 19d2:1405. usb-modeswitch and usb-storage added, but actual function untested.' >> "$ROOT/output/DO_NOT_FLASH.txt"
 echo 'Open first-boot Wi-Fi DachaHeat-Setup, no password; ZTE WAN and Heat Bridge disabled until owner secures LuCI.' >> "$ROOT/output/DO_NOT_FLASH.txt"
 # No password generation, storage or publication in public GitHub Actions.
 # First boot uses an open temporary Wi-Fi setup AP; no credentials embedded.
 chmod +x "$ROOT/overlay/etc/uci-defaults/98-heatbridge" "$ROOT/overlay/etc/uci-defaults/99-heatbridge-open-setup" "$ROOT/overlay/www/heatbridge/cgi-bin/api" "$ROOT/overlay/usr/sbin/heatbridge-enable"
 ok=0
 for variant in heat-lite heat-webui; do
-  packages='kmod-usb2 kmod-usb-net-cdc-ether uhttpd jsonfilter mosquitto-nossl mosquitto-client-nossl'
+  packages='kmod-usb2 kmod-usb-net-cdc-ether kmod-usb-storage usb-modeswitch uhttpd jsonfilter mosquitto-nossl mosquitto-client-nossl'
   if [[ "$variant" == heat-webui ]]; then packages="$packages luci"; fi
   mkdir -p "$ROOT/output/$variant"
   echo "Building $variant with $packages"
@@ -54,7 +55,7 @@ VENDOR_DIR="$ROOT/output/omni2-firstflash"
 mkdir -p "$VENDOR_DIR"
 vendor_ok=0
 echo 'Attempting OEM-compatible FACTORY format (board identity NOT verified)'
-if make image PROFILE="$VENDOR_PROFILE" PACKAGES='kmod-usb2 kmod-usb-net-cdc-ether uhttpd jsonfilter mosquitto-nossl mosquitto-client-nossl' FILES="$ROOT/overlay" DISABLED_SERVICES="mosquitto" BIN_DIR="$VENDOR_DIR" > "$ROOT/output/omni2-firstflash.log" 2>&1; then
+if make image PROFILE="$VENDOR_PROFILE" PACKAGES='kmod-usb2 kmod-usb-net-cdc-ether kmod-usb-storage usb-modeswitch uhttpd jsonfilter mosquitto-nossl mosquitto-client-nossl' FILES="$ROOT/overlay" DISABLED_SERVICES="mosquitto" BIN_DIR="$VENDOR_DIR" > "$ROOT/output/omni2-firstflash.log" 2>&1; then
   for bin in "$VENDOR_DIR/"*squashfs-factory.bin; do
     [[ -f "$bin" ]] || continue
     bytes="$(stat -c '%s' "$bin")"
@@ -74,15 +75,15 @@ fi
 # Optional Omni II FACTORY build with LuCI for Android-only post-install WAN setup.
 VENDOR_WEB_DIR="$ROOT/output/omni2-firstflash-webui"
 mkdir -p "$VENDOR_WEB_DIR"
-if make image PROFILE="$VENDOR_PROFILE" PACKAGES='kmod-usb2 kmod-usb-net-cdc-ether uhttpd jsonfilter mosquitto-nossl mosquitto-client-nossl luci' FILES="$ROOT/overlay" DISABLED_SERVICES="mosquitto" BIN_DIR="$VENDOR_WEB_DIR" > "$ROOT/output/omni2-firstflash-webui.log" 2>&1; then
+if make image PROFILE="$VENDOR_PROFILE" PACKAGES='kmod-usb2 kmod-usb-net-cdc-ether kmod-usb-storage usb-modeswitch uhttpd jsonfilter mosquitto-nossl mosquitto-client-nossl luci' FILES="$ROOT/overlay" DISABLED_SERVICES="mosquitto" BIN_DIR="$VENDOR_WEB_DIR" > "$ROOT/output/omni2-firstflash-webui.log" 2>&1; then
   for bin in "$VENDOR_WEB_DIR/"*squashfs-factory.bin; do
     [[ -f "$bin" ]] || continue
     bytes="$(stat -c '%s' "$bin")"
     echo "omni2-firstflash-webui: $bytes bytes; OEM factory format with LuCI, unverified on ZBT" | tee -a "$ROOT/output/sizes.txt"
-    if (( bytes <= 7533248 )); then
+    if (( bytes <= 7405568 )); then
       sha256sum "$bin" >> "$ROOT/output/SHA256SUMS"
     else
-      echo 'Omni II webui image exceeds 7,533,248-byte preflight ceiling, omitting' >&2
+      echo 'Omni II webui image exceeds 7,405,568-byte ceiling (current NDMS 0x720000 minus 64 KiB), omitting' >&2
       rm -f "$bin"
     fi
   done
