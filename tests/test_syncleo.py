@@ -22,7 +22,9 @@ class SyncleoTest(unittest.TestCase):
         except ImportError:
             raise unittest.SkipTest('cryptography is required for the independent peer')
         cls.tmp = tempfile.TemporaryDirectory()
-        cls.binary = str(Path(cls.tmp.name) / 'syncleo')
+        cls.binary = os.environ.get('SYNCLEO_TEST_BINARY',str(Path(cls.tmp.name) / 'syncleo'))
+        if os.environ.get('SYNCLEO_TEST_BINARY'):
+            return
         subprocess.run(['gcc','-Os','-std=c99','-Wall','-Wextra','-Werror',
                         *shlex.split(os.environ.get('SYNCLEO_CFLAGS','')),
                         str(ROOT / 'native/syncleo/main.c'),'-o',cls.binary,
@@ -82,16 +84,16 @@ class SyncleoTest(unittest.TestCase):
                         self.assertEqual(plain[0],seq)
                         if kind==1:
                             commands.append(plain[1:])
-                            self.assertEqual(plain[1:],bytes([2,22,0]))
+                            self.assertEqual(plain[1:],bytes([1,0]) if action=='mode' else bytes([2,22,0]))
                             if forged_ack:
                                 sock.sendto(bytes([1,0,0,0]),addr)
                             else:
                                 sock.sendto(encode(1,0,b''),addr)
-                                sock.sendto(encode(6,1,bytes([2,22,0])),addr)
+                                sock.sendto(encode(6,1,bytes([1,0]) if action=='mode' else bytes([2,22,0])),addr)
             except Exception as e: errors.append(e)
         worker=threading.Thread(target=peer,daemon=True);worker.start()
         config=f'127.0.0.1\n{endpoint[1]}\n{public.hex()}\n{token.hex()}\n'
-        args=[self.binary,action]+(['22'] if action=='set' else [])
+        args=[*shlex.split(os.environ.get('SYNCLEO_RUNNER','')),self.binary,action]+(['22'] if action=='set' else ['0'] if action=='mode' else [])
         try:
             result=subprocess.run(args,input=config,text=True,capture_output=True,timeout=12)
         finally:
@@ -128,3 +130,13 @@ class SyncleoTest(unittest.TestCase):
         self.assertNotEqual(r.returncode,0)
         self.assertEqual(commands,[])
         self.assertNotIn('1234567890abcdef',r.stderr+r.stdout)
+
+    def test_power_off_requires_acknowledged_mode_command(self):
+        r,commands=self.exchange('mode')
+        self.assertEqual(r.returncode,0,r.stderr)
+        data=json.loads(r.stdout)
+        self.assertTrue(data['command_acknowledged'])
+        self.assertTrue(data['state_echo_matches_request'])
+        self.assertEqual(data['device_mode'],0)
+        self.assertIn(bytes([1,0]),commands)
+        self.assertFalse(data['heating_confirmed'])

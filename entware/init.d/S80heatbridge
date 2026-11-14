@@ -1,0 +1,46 @@
+#!/opt/bin/sh
+set -eu
+export PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+config=/opt/etc/heatbridge/config.json
+pidfile=/tmp/heatbridge/httpd.pid
+find_httpd() {
+ for p in /opt/sbin/uhttpd /opt/bin/uhttpd /opt/usr/sbin/uhttpd /opt/sbin/uhttpd_kn; do
+  [ ! -x "$p" ] || { printf '%s\n' "$p"; return 0; }
+ done
+ echo 'uhttpd from the Entware uhttpd_kn package was not found.' >&2; return 1
+}
+stop_server() {
+ if [ -f "$pidfile" ]; then
+  pid="$(cat "$pidfile")"
+  case "$pid" in ''|*[!0-9]*) return;; esac
+  if [ -r "/proc/$pid/cmdline" ] && tr '\0' ' ' < "/proc/$pid/cmdline" | grep -Fq '/opt/share/heatbridge/www'; then
+   kill "$pid" 2>/dev/null || true
+  fi
+  rm -f "$pidfile"
+ fi
+}
+start_server() {
+ [ -f "$config" ] && [ -s /opt/etc/heatbridge/httpd.conf ] || { echo 'Run the Heat Bridge installer first.' >&2; exit 1; }
+ if [ -f "$pidfile" ]; then
+  pid="$(cat "$pidfile")"
+  case "$pid" in ''|*[!0-9]*) ;; *) if kill -0 "$pid" 2>/dev/null; then echo 'Heat Bridge is already running.'; return; fi;; esac
+ fi
+ binary="$(find_httpd)";lan="$(jq -r '.lan_ip' "$config")"
+ # Bind only to the LAN address. No wildcard or IPv6 listener and no port forwarding.
+ case "$lan" in 192.168.*|10.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) ;; *) echo 'Invalid LAN address.' >&2;exit 1;; esac
+ mkdir -p /tmp/heatbridge
+ "$binary" -f -p "$lan:8765" -h /opt/share/heatbridge/www \
+  -c /opt/etc/heatbridge/httpd.conf -x /cgi-bin -t 90 -T 95 -n 1 -N 8 \
+  -r 'Heat Bridge' >/tmp/heatbridge/httpd.log 2>&1 &
+ pid=$!; printf '%s\n' "$pid" > "$pidfile"
+ sleep 1
+ kill -0 "$pid" 2>/dev/null || { echo 'Web server failed. See /tmp/heatbridge/httpd.log.' >&2;exit 1; }
+ echo "Heat Bridge: http://$lan:8765/"
+}
+case "${1:-}" in
+ start) start_server;;
+ stop) stop_server;;
+ restart) stop_server; sleep 1; start_server;;
+ status) [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null;;
+ *) echo 'Usage: S80heatbridge {start|stop|restart|status}' >&2;exit 1;;
+esac

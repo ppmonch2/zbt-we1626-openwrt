@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+<title>Домашнее отопление</title><link rel="stylesheet" href="style.css"></head>
+<body><main><header><span class="tag">BALLU · ЛОКАЛЬНОЕ УПРАВЛЕНИЕ</span><h1>Домашнее отопление</h1>
+<p>Команды отсюда идут прямо к обогревателям по Wi-Fi. Удалённое управление Алисой остаётся через ваш HOMMYN.</p></header>
+<section class="presets"><button id="away">Уехал · 12 °C</button><button id="arrive">Еду на дачу · 22 °C</button><button id="refresh">Обновить список</button></section>
+<p id="status" role="status">Подключение…</p><div id="heaters"></div>
+<footer>Режимы «Уехал» и «Еду на дачу» меняют только уставку. Выключенный прибор включается отдельной кнопкой. Подтверждение команды и фактический нагрев — разные состояния. Без интернета доступны локальные команды; для удалённой Алисы интернет дома необходим.</footer>
+</main><script src="app.js"></script></body></html>

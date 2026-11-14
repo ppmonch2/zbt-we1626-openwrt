@@ -1,0 +1,47 @@
+name: Ballu USB package for Keenetic Entware
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - entware/**
+      - native/**
+      - tests/test_entware.py
+      - tests/test_syncleo*.py
+      - .github/workflows/entware-build.yml
+permissions:
+  contents: read
+jobs:
+  usb-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.13.0
+      - name: Install host test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev python3-cryptography jq qemu-user
+      - name: Check web, installer and native protocol
+        run: |
+          sh -n entware/install.sh
+          sh -n entware/bin/heatbridge-device
+          sh -n entware/init.d/S80heatbridge
+          sh -n entware/www/cgi-bin/api
+          node --check entware/www/app.js
+          python3 -m unittest discover -s tests -v
+      - name: Build portable MIPS client and USB archive
+        run: bash entware/build.sh
+      - name: Test the MIPS executable against the encrypted UDP peer
+        env:
+          SYNCLEO_TEST_BINARY: output-entware/usb-root/heatbridge-entware/bin/heatbridge-syncleo
+          SYNCLEO_RUNNER: qemu-mipsel
+        run: python3 -m unittest discover -s tests -p test_syncleo.py -v
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ballu-Entware-USB
+          path: output-entware/usb-root/
+          retention-days: 14
+          if-no-files-found: error

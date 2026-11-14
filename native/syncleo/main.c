@@ -94,13 +94,15 @@ static int port_number(const char *s) {
     char *end; long n=strtol(s,&end,10); return *s && !*end && n>0 && n<=65535?(int)n:0;
 }
 int main(int argc,char **argv) {
-    int setting=0,temp=0;
+    int setting=0,temp=0,mode_command=0;
     if(argc==2 && !strcmp(argv[1],"read")) setting=0;
     else if(argc==3 && !strcmp(argv[1],"set")) {
         char *end;long t=strtol(argv[2],&end,10);
         if(!*argv[2] || *end || t<5 || t>30) return fail("invalid_temperature");
         setting=1;temp=(int)t;
-    } else return fail("usage: heatbridge-syncleo read | set INTEGER_5_TO_30");
+    } else if(argc==3 && !strcmp(argv[1],"mode") && strlen(argv[2])==1 && argv[2][0]>='0' && argv[2][0]<='3') {
+        setting=1;mode_command=1;temp=argv[2][0]-'0';
+    } else return fail("usage: heatbridge-syncleo read | set INTEGER_5_TO_30 | mode 0_TO_3");
     char ip[64],porttext[16],publictext[80],tokentext[48];
     unsigned char publickey[32],token[16],handshake[53]={0,1,49,0,0};
     if(!line(ip,sizeof(ip)) || !line(porttext,sizeof(porttext)) || !line(publictext,sizeof(publictext)) ||
@@ -130,8 +132,8 @@ int main(int argc,char **argv) {
     double current=0,deadline=now()+(setting?6:3),lastsend=0;
     while(now()<deadline) {
         if(setting && !ack && now()-lastsend>=1.0) {
-            unsigned char command[3]={2,(unsigned char)temp,0};
-            if(!send_frame(fd,1,1,command,3)) break;
+            unsigned char command[3]={(unsigned char)(mode_command?1:2),(unsigned char)temp,0};
+            if(!send_frame(fd,1,1,command,mode_command?2:3)) break;
             lastsend=now();
         }
         int n=receive(fd,buf,100),size=n>0?decode(buf,n,plain):-1;
@@ -141,17 +143,18 @@ int main(int argc,char **argv) {
         if(buf[1]!=1 || size<1) continue;
         if(!send_frame(fd,buf[0],0,NULL,0)) break;
         if(plain[0]==2 && size==3 && plain[1]<=35 && plain[2]==0) {
-            target=plain[1]; if(setting && target==temp) echo=1;
+            target=plain[1]; if(setting && !mode_command && target==temp) echo=1;
         }
-        if(plain[0]==1 && size==2) mode=plain[1];
+        if(plain[0]==1 && size==2) {mode=plain[1];if(setting && mode_command && mode==temp)echo=1;}
         if(plain[0]==20 && size==3 && (plain[2]&127)<100) {
             current=plain[1]+(plain[2]&127)/100.0;if(plain[2]&128) current=-current;current_valid=1;
         }
         if(setting && ack && echo) break;
     }
     close(fd);OPENSSL_cleanse(keyin,sizeof(keyin));OPENSSL_cleanse(keyout,sizeof(keyout));
-    printf("{\"ok\":true,\"encrypted_session\":true,\"command_acknowledged\":%s,\"setpoint_reported\":%s,\"reported_target\":",ack?"true":"false",echo?"true":"false");
+    printf("{\"ok\":true,\"encrypted_session\":true,\"command_acknowledged\":%s,\"state_echo_matches_request\":%s,\"reported_target\":",ack?"true":"false",echo?"true":"false");
     if(target>=0) printf("%d",target);else printf("null");
+    printf(",\"setpoint_reported\":%s",setting&&!mode_command&&echo?"true":"false");
     printf(",\"current_temperature\":");if(current_valid) printf("%.2f",current);else printf("null");
     printf(",\"device_mode\":");if(mode>=0) printf("%d",mode);else printf("null");
     printf(",\"heating_confirmed\":false}\n");

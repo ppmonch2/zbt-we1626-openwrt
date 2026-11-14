@@ -1,0 +1,88 @@
+#!/opt/bin/sh
+set -eu
+umask 077
+export PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+base="${HEATBRIDGE_PREFIX:-/opt}"
+config="$base/etc/heatbridge/config.json"
+worker="$base/bin/heatbridge-device"
+header() { printf 'Content-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n'; }
+error() { header; jq -cn --arg error "$1" '{ok:false,error:$error}'; exit 0; }
+[ -f "$config" ] || error server_not_configured
+lan="$(jq -r '.lan_ip' "$config")"
+[ "${HTTP_HOST:-}" = "$lan:8765" ] || error invalid_host
+if [ -n "${HTTP_ORIGIN:-}" ]; then
+ [ "$HTTP_ORIGIN" = "http://$lan:8765" ] || error invalid_origin
+fi
+method="${REQUEST_METHOD:-}"
+[ "$method" = GET ] || [ "$method" = POST ] || error invalid_method
+mkdir -p /tmp/heatbridge
+lock=/tmp/heatbridge/api.lock
+mkdir "$lock" 2>/dev/null || error server_busy
+trap 'rmdir "$lock" 2>/dev/null || true' EXIT
+trap 'exit 1' HUP INT TERM
+save() {
+ tmp="$(mktemp "$base/etc/heatbridge/.config.XXXXXX")" || error save_failed
+ if ! jq "$@" "$config" > "$tmp"; then rm -f "$tmp"; error save_failed; fi
+ chmod 600 "$tmp"
+ mv "$tmp" "$config" || error save_failed
+}
+result='null'
+if [ "$method" = POST ]; then
+ [ "${HTTP_X_HEATBRIDGE:-}" = 1 ] || error missing_request_header
+ case "${CONTENT_TYPE:-}" in application/json*) ;; *) error json_required;; esac
+ size="${CONTENT_LENGTH:-}"
+ case "$size" in ''|*[!0-9]*) error invalid_length;; esac
+ [ "$size" -gt 1 ] && [ "$size" -le 4096 ] || error invalid_length
+ payload="$(dd bs=1 count="$size" 2>/dev/null)"
+ printf '%s' "$payload" | jq -e 'type=="object"' >/dev/null 2>&1 || error invalid_json
+ action="$(printf '%s' "$payload" | jq -r '.action // empty')"
+ id="$(printf '%s' "$payload" | jq -r '.id // empty')"
+ case "$id" in h1|h2|h3|h4) ;; *) error invalid_heater;; esac
+ case "$action" in
+  configure)
+   printf '%s' "$payload" | jq -e '[.name,.device_id,.token]|all(type=="string")' >/dev/null || error invalid_credentials
+   printf '%s' "$payload" | jq -e '.name|explode|all(.>=32 and .!=127)' >/dev/null || error invalid_name
+   name="$(printf '%s' "$payload" | jq -r '.name // empty')"
+   device="$(printf '%s' "$payload" | jq -r '.device_id // empty')"
+   token="$(printf '%s' "$payload" | jq -r '.token // empty')"
+   [ -n "$name" ] && [ "${#name}" -le 80 ] || error invalid_name
+   printf '%s' "$name" | LC_ALL=C grep -q '[[:cntrl:]]' && error invalid_name
+   case "$device$token" in *[!a-fA-F0-9]*) error invalid_credentials;; esac
+   [ "${#device}" = 12 ] && [ "${#token}" = 32 ] || error invalid_credentials
+   # Secret arguments go to jq over a pipe, never argv or a public web file.
+   tmp="$(mktemp "$base/etc/heatbridge/.config.XXXXXX")"
+   printf '%s' "$payload" | jq --slurpfile old "$config" '
+     . as $new | $old[0] | .heaters[$new.id] = {
+       name:$new.name,device_id:($new.device_id|ascii_downcase),token:($new.token|ascii_downcase),verified:false,temp:18}' > "$tmp"
+   chmod 600 "$tmp"; mv "$tmp" "$config"
+   rm -f "/tmp/heatbridge/$id.json"
+   ;;
+  probe)
+   if result="$("$worker" read "$id" 2>/dev/null)"; then
+    printf '%s' "$result" | jq -e '.encrypted_session==true and (.reported_target|type=="number")' >/dev/null || error no_target_state
+    save --arg id "$id" '.heaters[$id].verified=true'
+    printf '%s\n' "$result" > "/tmp/heatbridge/$id.json"
+   else error local_connection_failed_check_wifi_and_share_link; fi
+   ;;
+  set|mode)
+   value="$(printf '%s' "$payload" | jq -r '.value // empty')"
+   case "$value" in ''|*[!0-9]*) error invalid_value;; esac
+   if [ "$action" = set ]; then
+    [ "$value" -ge 5 ] && [ "$value" -le 30 ] || error invalid_temperature
+   else
+    case "$value" in 0|1|2|3) ;; *) error invalid_mode;; esac
+   fi
+   if result="$("$worker" "$action" "$id" "$value" 2>/dev/null)"; then
+    printf '%s' "$result" | jq -e '.command_acknowledged==true' >/dev/null || error command_unconfirmed_may_have_been_applied
+    printf '%s\n' "$result" > "/tmp/heatbridge/$id.json"
+    [ "$action" != set ] || save --arg id "$id" --argjson value "$value" '.heaters[$id].temp=$value'
+   else error command_unconfirmed_may_have_been_applied; fi
+   ;;
+  *) error invalid_action;;
+ esac
+fi
+# Explicit allowlist: no tokens, URLs, public keys or credentials reach GET responses.
+header
+jq -c --argjson result "$result" '{ok:true,alice_route:"existing_hommyn",result:$result,
+ heaters:[.heaters|to_entries[]|{id:.key,name:.value.name,temp:.value.temp,
+ configured:((.value.device_id // "")!=""),verified:(.value.verified // false)}]}' "$config"

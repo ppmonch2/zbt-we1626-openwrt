@@ -1,0 +1,29 @@
+#!/opt/bin/sh
+# One authenticated session at a time; never put a token in argv or logs.
+set -eu
+export PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+base="${HEATBRIDGE_PREFIX:-/opt}"
+config="$base/etc/heatbridge/config.json"
+client="$base/libexec/heatbridge-syncleo"
+action="${1:-}"; id="${2:-}"; value="${3:-}"
+case "$id" in h1|h2|h3|h4) ;; *) exit 1;; esac
+case "$action" in read) ;; set|mode) case "$value" in ''|*[!0-9]*) exit 1;; esac;; *) exit 1;; esac
+[ "$action" = read ] || [ "$(jq -r --arg id "$id" '.heaters[$id].verified // false' "$config")" = true ] || { echo probe_required >&2; exit 1; }
+mkdir -p /tmp/heatbridge
+lock=/tmp/heatbridge/device.lock
+mkdir "$lock" 2>/dev/null || { echo heater_busy >&2; exit 1; }
+trap 'rmdir "$lock" 2>/dev/null || true' EXIT
+trap 'exit 1' HUP INT TERM
+lan="$(jq -r '.lan_ip' "$config")"
+device="$(jq -r --arg id "$id" '.heaters[$id].device_id // empty' "$config")"
+[ -n "$device" ] || { echo configure_device_first >&2; exit 1; }
+endpoint="$("$client" discover "$lan" "$device")" || exit 1
+settings() {
+  printf '%s' "$endpoint" | jq -r '.ip, .port, .public_key'
+  jq -r --arg id "$id" '.heaters[$id].token' "$config"
+}
+if [ "$action" = read ]; then
+  settings | "$client" read
+else
+  settings | "$client" "$action" "$value"
+fi
