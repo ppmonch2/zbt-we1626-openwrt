@@ -14,7 +14,31 @@ import xml.etree.ElementTree as ET
 
 
 class ServiceError(Exception):
-    pass
+    def __init__(self, reason, *, service=None, http_status=None, cloud_code=None):
+        super().__init__(reason)
+        self.service = service
+        self.http_status = http_status
+        self.cloud_code = cloud_code
+
+
+def error_details(error):
+    # Never log exception text, response bodies, URLs or signed request headers.
+    details = {}
+    if error.service in ('sqs', 's3'):
+        details['service'] = error.service
+    if type(error.http_status) is int:
+        details['http_status'] = error.http_status
+    allowed = {'AccessDenied', 'AccessDeniedException', 'SignatureDoesNotMatch',
+               'InvalidClientTokenId', 'InvalidAccessKeyId', 'RequestTimeTooSkewed',
+               'ExpiredToken', 'NonExistentQueue', 'AWS.SimpleQueueService.NonExistentQueue'}
+    if error.cloud_code in allowed:
+        details['cloud_code'] = error.cloud_code
+    reason = error.args[0] if error.args else None
+    if reason in ('deadline', 'cloud_http_error', 'cloud_connection_error',
+                  'oversized_response', 'queue_rejected', 'invalid_queue_response',
+                  'invalid_acknowledgement'):
+        details['reason'] = reason
+    return details
 
 
 def signed_headers(method, url, body, service, access, secret, instant=None):
@@ -66,9 +90,15 @@ class Services:
         except urllib.error.HTTPError as exc:
             if exc.code == 404 and service == 's3' and method == 'GET':
                 return None
-            raise ServiceError('cloud_http_error') from None
+            code = None
+            try:
+                code = ET.fromstring(exc.read(4096)).findtext('.//{*}Code')
+            except (ET.ParseError, OSError, TypeError, AttributeError):
+                pass
+            raise ServiceError('cloud_http_error', service=service,
+                               http_status=exc.code, cloud_code=code) from None
         except (OSError, ValueError) as exc:
-            raise ServiceError('cloud_connection_error') from None
+            raise ServiceError('cloud_connection_error', service=service) from None
 
     def submit(self, job, deadline):
         # Query protocol is supported by YMQ; do not assume AWS's newer JSON API.

@@ -5,7 +5,7 @@ import os
 import re
 import time
 
-from yandex_services import ServiceError, from_environment, owner_authorized
+from yandex_services import ServiceError, error_details, from_environment, owner_authorized
 
 RANGE = 'devices.capabilities.range'
 POWER = 'devices.capabilities.on_off'
@@ -70,8 +70,14 @@ def process(event, names, owner_uid, services, authorize=owner_authorized):
     if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', request_id):
         return {'payload': {'error_code': 'INVALID_ACTION'}}
     response = {'request_id': request_id}
+    def trace(stage, **details):
+        print(json.dumps({'request_id': request_id, 'stage': stage,
+                          'elapsed_ms': round((time.monotonic() - deadline + 2.35) * 1000),
+                          **details}))
     if not authorize(headers.get('authorization'), owner_uid, deadline):
+        trace('authorization_failed')
         return {**response, 'payload': {'error_code': 'ACCOUNT_LINKING_ERROR'}}
+    trace('authorized')
     kind = event.get('request_type')
     if kind == 'discovery':
         return {**response, 'payload': {'user_id': owner_uid, 'devices': catalog(names)}}
@@ -119,21 +125,31 @@ def process(event, names, owner_uid, services, authorize=owner_authorized):
                    'expires_at': time.time() + max(0, deadline - time.monotonic() - .1)}
             try:
                 services.submit(job, deadline)
+                trace('queue_submitted', job_id=job['id'])
                 pending.append((job, result))
-            except ServiceError:
-                pass
+            except ServiceError as exc:
+                trace('queue_submit_failed', **error_details(exc))
+    ack_errors = set()
     while pending and time.monotonic() < deadline:
         for job, result in pending[:]:
             try:
                 ack = services.acknowledgement(job['id'], deadline)
-            except ServiceError:
+            except ServiceError as exc:
+                if job['id'] not in ack_errors:
+                    trace('ack_read_failed', **error_details(exc))
+                    ack_errors.add(job['id'])
                 ack = None
             if ack is not None:
                 if confirmed(ack, job):
                     result['state']['action_result'] = {'status': 'DONE'}
+                    trace('heater_confirmed', job_id=job['id'])
+                else:
+                    trace('heater_confirmation_rejected', job_id=job['id'])
                 pending.remove((job, result))
         if pending:
             time.sleep(min(.08, max(0, deadline - time.monotonic())))
+    if pending:
+        trace('confirmation_deadline')
     return {**response, 'payload': {'devices': output}}
 
 

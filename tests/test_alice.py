@@ -126,6 +126,39 @@ class AliceProtocolTest(unittest.TestCase):
 
 
 class CloudHttpsTest(unittest.TestCase):
+    def test_submit_failure_logs_stage_and_cloud_code_without_credentials(self):
+        for code in ('AccessDeniedException', 'fixture-secret'):
+            def opener(req, timeout):
+                body = ('<ErrorResponse><Error><Code>' + code + '</Code>'
+                        '<Message>fixture-secret Bearer fixture</Message></Error></ErrorResponse>')
+                raise urllib.error.HTTPError(req.full_url, 400, 'fixture-secret', {},
+                                             io.BytesIO(body.encode()))
+            client = Services('https://message-queue.api.cloud.yandex.net/folder/id/jobs',
+                              'private-bucket', 'fixture-key', 'fixture-secret', opener)
+            output = io.StringIO()
+            with patch('sys.stdout', output):
+                response = skill.process(event(), {'h2': 'Мансарда'}, '123', client,
+                                         authorize=lambda *args: True)
+            records = [json.loads(line) for line in output.getvalue().splitlines()]
+            failure = next(record for record in records if record['stage'] == 'queue_submit_failed')
+            self.assertEqual(failure['http_status'], 400)
+            self.assertEqual(failure['service'], 'sqs')
+            self.assertEqual(failure.get('cloud_code'), code if code == 'AccessDeniedException' else None)
+            self.assertNotIn('fixture-secret', output.getvalue())
+            self.assertNotIn('fixture-key', output.getvalue())
+            self.assertNotIn('Bearer fixture', output.getvalue())
+            self.assertEqual(response['payload']['devices'][0]['capabilities'][0]['state']
+                             ['action_result']['status'], 'ERROR')
+
+    def test_authorization_failure_is_logged_without_token(self):
+        output = io.StringIO()
+        with patch('sys.stdout', output):
+            response = skill.process(event(), {'h2': 'Мансарда'}, '123', FakeServices(),
+                                     authorize=lambda *args: False)
+        self.assertEqual(json.loads(output.getvalue())['stage'], 'authorization_failed')
+        self.assertNotIn('fixture', output.getvalue())
+        self.assertEqual(response['payload']['error_code'], 'ACCOUNT_LINKING_ERROR')
+
     def test_owner_login_is_explicit_and_uid_takes_priority(self):
         self.assertEqual(skill.owner_identifier({'HEATBRIDGE_OWNER_LOGIN': 'Owner.Name'}), 'login:owner.name')
         self.assertEqual(skill.owner_identifier({'HEATBRIDGE_OWNER_LOGIN': 'Owner.Name', 'HEATBRIDGE_OWNER_UID': '123'}), '123')
