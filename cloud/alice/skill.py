@@ -137,11 +137,23 @@ def process(event, names, owner_uid, services, authorize=owner_authorized):
     return {**response, 'payload': {'devices': output}}
 
 
+def owner_identifier(settings):
+    uid = settings.get('HEATBRIDGE_OWNER_UID', '')
+    if uid:
+        if not re.fullmatch(r'[1-9][0-9]{0,31}', uid):
+            raise ValueError('configuration')
+        return uid
+    login = settings.get('HEATBRIDGE_OWNER_LOGIN', '')
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,99}', login):
+        raise ValueError('configuration')
+    return 'login:' + login.lower()
+
+
 def handler(event, context):
     try:
-        owner = os.environ['HEATBRIDGE_OWNER_UID']
+        owner = owner_identifier(os.environ)
         names = json.loads(os.environ['HEATBRIDGE_DEVICES_JSON'])
-        if not re.fullmatch(r'[0-9]{1,32}', owner) or not isinstance(names, dict) or not names:
+        if not isinstance(names, dict) or not names:
             raise ValueError('configuration')
         if any(key not in IDS or not isinstance(name, str) or not 1 <= len(name) <= 40 for key, name in names.items()):
             raise ValueError('configuration')

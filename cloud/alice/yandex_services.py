@@ -108,7 +108,15 @@ def owner_authorized(authorization, owner_uid, deadline, opener=urllib.request.u
     try:
         with opener(req, timeout=min(.65, remaining)) as response:
             raw = response.read(8193)
-            return len(raw) <= 8192 and str(json.loads(raw).get('id', '')) == owner_uid
+            if len(raw) > 8192:
+                return False
+            info = json.loads(raw)
+            if not isinstance(info, dict) or not re.fullmatch(r'[1-9][0-9]{0,31}', str(info.get('id', ''))):
+                return False
+            if owner_uid.startswith('login:'):
+                login = info.get('login')
+                return isinstance(login, str) and login.lower() == owner_uid[6:]
+            return str(info['id']) == owner_uid
     except (OSError, ValueError, UnicodeError):
         return False
 

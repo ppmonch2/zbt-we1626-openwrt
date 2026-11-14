@@ -126,6 +126,25 @@ class AliceProtocolTest(unittest.TestCase):
 
 
 class CloudHttpsTest(unittest.TestCase):
+    def test_owner_login_is_explicit_and_uid_takes_priority(self):
+        self.assertEqual(skill.owner_identifier({'HEATBRIDGE_OWNER_LOGIN': 'Owner.Name'}), 'login:owner.name')
+        self.assertEqual(skill.owner_identifier({'HEATBRIDGE_OWNER_LOGIN': 'Owner.Name', 'HEATBRIDGE_OWNER_UID': '123'}), '123')
+        for settings in ({}, {'HEATBRIDGE_OWNER_LOGIN': 'owner@yandex.ru'},
+                         {'HEATBRIDGE_OWNER_UID': 'invalid', 'HEATBRIDGE_OWNER_LOGIN': 'owner'}):
+            with self.assertRaises(ValueError):
+                skill.owner_identifier(settings)
+
+    def test_login_authorization_checks_actual_yandex_identity_and_rejects_invalid_info(self):
+        deadline = time.monotonic() + 2
+        def info(data):
+            return lambda req, timeout: io.BytesIO(json.dumps(data).encode())
+        self.assertTrue(owner_authorized('Bearer fixture', 'login:owner.name', deadline,
+                                        info({'id': '123', 'login': 'Owner.Name'})))
+        self.assertFalse(owner_authorized('Bearer fixture', 'login:owner.name', deadline,
+                                         info({'id': '999', 'login': 'another.owner'})))
+        for data in ({'login': 'owner.name'}, [], {'id': '123'}, {'id': 'invalid', 'login': 'owner.name'}):
+            self.assertFalse(owner_authorized('Bearer fixture', 'login:owner.name', deadline, info(data)))
+
     def test_authentication_checks_yandex_uid_not_just_token_presence(self):
         captured = []
         def opener(req, timeout):
