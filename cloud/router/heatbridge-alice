@@ -12,10 +12,22 @@ trap '' HUP
 trap 'exit 0' INT TERM
 curl -q --help all | grep -q -- '--aws-sigv4' || { echo 'curl with AWS SigV4 is required.' >&2; exit 1; }
 jq -e '
- (.queue_url|type=="string" and test("^https://message-queue\\.api\\.cloud\\.yandex\\.net/[A-Za-z0-9_./-]+$")) and
- (.ack_bucket|type=="string" and test("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")) and
- (.access_key|type=="string" and test("^[A-Za-z0-9_+=/.-]{10,200}$")) and
- (.secret_key|type=="string" and test("^[A-Za-z0-9_+=/.-]{10,200}$"))
+ # Entware jq can be built without the Oniguruma regular expression library.
+ def ascii_only($extra):
+  if type!="string" then false else
+   explode|all(. as $c|($c>=48 and $c<=57) or ($c>=65 and $c<=90) or
+    ($c>=97 and $c<=122) or ($extra|contains([$c])))
+  end;
+ def bounded_ascii($min;$max;$extra):
+  if type!="string" then false else length>=$min and length<=$max and ascii_only($extra) end;
+ (.queue_url|if type!="string" then false else
+  startswith("https://message-queue.api.cloud.yandex.net/") and
+  (ltrimstr("https://message-queue.api.cloud.yandex.net/")|length>0 and ascii_only([95,46,47,45])) end) and
+ (.ack_bucket|if type!="string" then false else
+  bounded_ascii(3;63;[45,46]) and .==ascii_downcase and
+  (.[0:1]|ascii_only([])) and (.[-1:]|ascii_only([])) end) and
+ (.access_key|bounded_ascii(10;200;[95,43,61,47,46,45])) and
+ (.secret_key|bounded_ascii(10;200;[95,43,61,47,46,45]))
 ' "$config" >/dev/null || { echo 'Invalid alice.json' >&2; exit 1; }
 queue="$(jq -r .queue_url "$config")"
 bucket="$(jq -r .ack_bucket "$config")"

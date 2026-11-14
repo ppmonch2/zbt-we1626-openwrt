@@ -10,7 +10,8 @@ chmod 700 "$state"
 job="$(head -c 2049)"
 [ "${#job}" -le 2048 ] || exit 1
 printf '%s' "$job" | jq -e '
- type=="object" and (.id|type=="string" and test("^[a-f0-9]{64}$")) and
+ type=="object" and (.id|if type!="string" then false else
+  length==64 and (explode|all((.>=48 and .<=57) or (.>=97 and .<=102))) end) and
  (.heater=="h1" or .heater=="h2" or .heater=="h3" or .heater=="h4") and
  (.value|type=="number" and .==floor) and
  ((.action=="set" and .value>=5 and .value<=30) or

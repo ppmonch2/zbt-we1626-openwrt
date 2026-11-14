@@ -181,6 +181,20 @@ class CloudHttpsTest(unittest.TestCase):
 
 
 class RouterWorkerTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Make the host jq regex engine unusable, as in the owner's Entware build.
+        cls.regex_tmp = tempfile.TemporaryDirectory()
+        root = Path(cls.regex_tmp.name)
+        source = root/'no-regex.c'
+        source.write_text('int onig_new(void *unused, ...){(void)unused;return -5;}\n')
+        cls.no_regex = root/'no-regex.so'
+        subprocess.run(['gcc', '-shared', '-fPIC', '-Os', str(source), '-o', str(cls.no_regex)], check=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.regex_tmp.cleanup()
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.base = Path(self.tmp.name)
@@ -216,6 +230,7 @@ printf '{"encrypted_session":true,"command_acknowledged":true,"state_echo_matche
     def test_expired_jobs_invalid_ids_or_values_never_reach_hardware(self):
         for changes in ({'expires_at': time.time()-1}, {'expires_at': time.time()+60},
                         {'id': '../../etc/passwd'}, {'heater': 'h5'}, {'value': 31},
+                        {'id': 'a'*63}, {'id': 'A'*64}, {'id': 'g'*64},
                         {'value': True}, {'action': 'reboot'}, {'action': 'mode', 'value': 3}):
             self.assertNotEqual(self.call(self.job(**changes)).returncode, 0)
         self.assertFalse((self.base/'calls').exists())
@@ -238,10 +253,11 @@ printf '{"encrypted_session":true,"command_acknowledged":true,"state_echo_matche
         self.assertFalse(json.loads(result.stdout)['ok'])
         self.assertFalse((self.base/'calls').exists())
 
-    def agent(self, delete_ok=True):
+    def agent(self, delete_ok=True, config_changes=None):
         config = {'queue_url': 'https://message-queue.api.cloud.yandex.net/folder/id/jobs',
                   'ack_bucket': 'private-bucket', 'access_key': 'fixture-access-key',
                   'secret_key': 'fixture-secret-key'}
+        config.update(config_changes or {})
         (self.base/'etc/heatbridge/alice.json').write_text(json.dumps(config))
         wrapper = self.base/'bin/heatbridge-alice-worker'
         wrapper.write_text('#!/bin/sh\nexec sh "'+str(ROOT/'cloud/router/heatbridge-alice-worker')+'"\n')
@@ -284,6 +300,31 @@ curl() {
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.base/'calls').exists())
         self.assertFalse((self.base/'uploaded.json').exists())
+
+    def test_agent_and_worker_work_with_unusable_jq_regex_engine(self):
+        with patch.dict(os.environ, {'LD_PRELOAD': str(self.no_regex)}):
+            control = subprocess.run(['jq', '-n', '"fixture"|test("fixture")'], capture_output=True)
+            self.assertNotEqual(control.returncode, 0, 'Regex failure injection was ineffective')
+            result = self.agent()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(json.loads((self.base/'uploaded.json').read_text())['ok'])
+        self.assertEqual((self.base/'calls').read_text().splitlines(), ['set h2 22'])
+
+    def test_agent_rejects_unsafe_cloud_configuration_before_hardware_io(self):
+        for changes in (
+            {'queue_url': 'http://message-queue.api.cloud.yandex.net/folder/id/jobs'},
+            {'queue_url': 'https://message-queue.api.cloud.yandex.net.evil.example/jobs'},
+            {'queue_url': 'https://message-queue.api.cloud.yandex.net/'},
+            {'ack_bucket': 'UPPERCASE'}, {'ack_bucket': '-invalid'}, {'ack_bucket': 'invalid.'},
+            {'ack_bucket': 'a'*64}, {'ack_bucket': None},
+            {'access_key': 'short'}, {'secret_key': 'quote"injection'},
+            {'secret_key': 'newline\ninjection'}, {'secret_key': 'а'*40},
+        ):
+            with self.subTest(changes=changes):
+                result = self.agent(config_changes=changes)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((self.base/'calls').exists())
+                self.assertFalse((self.base/'uploaded.json').exists())
 
 
 if __name__ == '__main__':
