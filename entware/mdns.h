@@ -22,12 +22,24 @@ static int dnsquestion(unsigned char *b,int pos,const char *name,int type) {
   b[pos++]=(unsigned char)n;memcpy(b+pos,s,(size_t)n);pos+=n;if(!end)break;s=end+1;}
  b[pos++]=0;b[pos++]=0;b[pos++]=(unsigned char)type;b[pos++]=0;b[pos++]=1;return pos;
 }
+static int txt_matches_device(const unsigned char *b,int start,int end,const char *id) {
+ while(start<end){int n=b[start++];if(start+n>end)return 0;
+  const unsigned char *value=NULL;int len=0;
+  if(n>8&&!memcmp(b+start,"macaddr=",8)){value=b+start+8;len=n-8;}
+  else if(n>4&&!memcmp(b+start,"mac=",4)){value=b+start+4;len=n-4;}
+  if(value){char clean[13];int k=0;for(int j=0;j<len;j++)if(value[j]!=':'){if(k>=12)return 0;clean[k++]=(char)tolower(value[j]);}clean[k]=0;
+   if(k==12&&!strncmp(clean,id,12))return 1;}
+  start+=n;
+ }
+ return 0;
+}
 static int mdns_discover(const char *lan,const char *id) {
  if(strlen(id)!=12)return fail("invalid_device_id");
  for(int i=0;i<12;i++)if(!isxdigit((unsigned char)id[i]))return fail("invalid_device_id");
  struct in_addr local;if(inet_pton(AF_INET,lan,&local)!=1)return fail("invalid_lan_ip");
- char wanted[100];snprintf(wanted,sizeof(wanted),"%s._syncleo._udp.local",id);
+ char wanted[100],selected[256];snprintf(wanted,sizeof(wanted),"%s._syncleo._udp.local",id);
  for(char *s=wanted;*s;s++)*s=(char)tolower((unsigned char)*s);
+ snprintf(selected,sizeof(selected),"%s",wanted);
  int fd=socket(AF_INET,SOCK_DGRAM,0);if(fd<0)return fail("discovery_socket_failed");
  int yes=1;setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&yes,sizeof(yes));
  struct sockaddr_in bindaddr={.sin_family=AF_INET,.sin_port=htons(5353),.sin_addr={.s_addr=htonl(INADDR_ANY)}};
@@ -35,11 +47,11 @@ static int mdns_discover(const char *lan,const char *id) {
  if(bind(fd,(struct sockaddr*)&bindaddr,sizeof(bindaddr))||
     setsockopt(fd,IPPROTO_IP,IP_ADD_MEMBERSHIP,&group,sizeof(group))||
     setsockopt(fd,IPPROTO_IP,IP_MULTICAST_IF,&local,sizeof(local))) {close(fd);return fail("discovery_bind_failed");}
- unsigned char query[300]={0,0,0,0,0,2};int qn=dnsquestion(query,12,wanted,16);qn=dnsquestion(query,qn,wanted,33);
+ unsigned char query[300]={0,0,0,0,0,3};int qn=dnsquestion(query,12,wanted,16);qn=dnsquestion(query,qn,wanted,33);qn=dnsquestion(query,qn,"_syncleo._udp.local",12);
  struct sockaddr_in dest={.sin_family=AF_INET,.sin_port=htons(5353),.sin_addr=group.imr_multiaddr};
  unsigned char buf[CAP];char publickey[65]="",host[256]="",ip[INET_ADDRSTRLEN]="";
  struct {char name[256];struct in_addr addr;} addresses[16];int address_count=0;
- int port=0,protocol=0,type=0,curve=0;double deadline=now()+2.2,nextsend=0;
+ int port=0,protocol=0,type=0,curve=0;double deadline=now()+3.2,nextsend=0;
  while(now()<deadline) {
   if(now()>=nextsend){sendto(fd,query,(size_t)qn,0,(struct sockaddr*)&dest,sizeof(dest));nextsend=now()+.7;}
   struct pollfd pollfd={fd,POLLIN,0};if(poll(&pollfd,1,150)<=0)continue;
@@ -54,7 +66,16 @@ static int mdns_discover(const char *lan,const char *id) {
    int kind=(int)dns16(buf+p),len=(int)dns16(buf+p+8),start=p+10,end=start+len;
    int alive=buf[p+4]||buf[p+5]||buf[p+6]||buf[p+7];p=end;if(end>n)break;if(!alive)continue;
    if(kind==1&&len==4&&address_count<16){snprintf(addresses[address_count].name,256,"%s",owner);memcpy(&addresses[address_count++].addr,buf+start,4);}
-   if(strcmp(owner,wanted))continue;
+   if(kind==12&&!strcmp(owner,"_syncleo._udp.local")) {
+    int z=start;char instance[256];if(dnsname(buf,n,&z,instance,sizeof(instance))){
+     unsigned char subquery[600]={0,0,0,0,0,2};int sn=dnsquestion(subquery,12,instance,16);sn=dnsquestion(subquery,sn,instance,33);
+     sendto(fd,subquery,(size_t)sn,0,(struct sockaddr*)&dest,sizeof(dest));
+    }
+   }
+   if(kind==16&&strstr(owner,"._syncleo._udp.local")&&txt_matches_device(buf,start,end,wanted)&&strcmp(owner,selected)) {
+    snprintf(selected,sizeof(selected),"%s",owner);publickey[0]=host[0]=ip[0]=0;port=protocol=type=curve=0;
+   }
+   if(strcmp(owner,selected))continue;
    if(kind==33&&len>=7){port=(int)dns16(buf+start+4);int z=start+6;dnsname(buf,n,&z,host,sizeof(host));}
    if(kind==16){int z=start;while(z<end){int l=buf[z++];if(z+l>end)break;
      char text[260];memcpy(text,buf+z,(size_t)l);text[l]=0;z+=l;

@@ -62,7 +62,7 @@ class MdnsParserTest(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
   cls.tmp=tempfile.TemporaryDirectory();p=Path(cls.tmp.name)
-  src=p/'parser.c';src.write_text('#define _DEFAULT_SOURCE\n#define main client_main\n#include "'+str(ROOT/'native/syncleo/main.c')+'"\n#undef main\n#include "'+str(ROOT/'entware/mdns.h')+'"\nint parse(const unsigned char*b,int n,int*pos,char*out,int cap){return dnsname(b,n,pos,out,cap);}\n')
+  src=p/'parser.c';src.write_text('#define _DEFAULT_SOURCE\n#define main client_main\n#include "'+str(ROOT/'native/syncleo/main.c')+'"\n#undef main\n#include "'+str(ROOT/'entware/mdns.h')+'"\nint parse(const unsigned char*b,int n,int*pos,char*out,int cap){return dnsname(b,n,pos,out,cap);}\nint match_device(const unsigned char*b,int n,const char*id){return txt_matches_device(b,0,n,id);}\n')
   subprocess.run(['gcc','-shared','-fPIC','-Os',str(src),'-lcrypto','-o',str(p/'parser.so')],check=True)
   cls.lib=ctypes.CDLL(str(p/'parser.so'));cls.lib.parse.argtypes=[ctypes.c_char_p,ctypes.c_int,ctypes.POINTER(ctypes.c_int),ctypes.c_char_p,ctypes.c_int]
  @classmethod
@@ -71,6 +71,12 @@ class MdnsParserTest(unittest.TestCase):
   data=b'\x03abc\x05local\0\xc0\x00';pos=ctypes.c_int(11);out=ctypes.create_string_buffer(100)
   self.assertEqual(self.lib.parse(data,len(data),ctypes.byref(pos),out,len(out)),1)
   self.assertEqual(out.value,b'abc.local');self.assertEqual(pos.value,13)
+ def test_txt_device_identity_is_matched_independently_of_service_name(self):
+  self.lib.match_device.argtypes=[ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p]
+  field=b'macaddr=aa:bb:cc:dd:ee:ff';data=bytes([len(field)])+field
+  self.assertEqual(self.lib.match_device(data,len(data),b'aabbccddeeff'),1)
+  self.assertEqual(self.lib.match_device(data,len(data),b'000000000000'),0)
+  self.assertEqual(self.lib.match_device(data[:-2],len(data)-2,b'aabbccddeeff'),0)
  def test_compression_loops_and_truncated_labels_are_rejected(self):
   for data in [b'\xc0\x00',b'\x05ab',b'\xc0',b'\x40abc']:
    pos=ctypes.c_int(0);out=ctypes.create_string_buffer(100)

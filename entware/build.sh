@@ -11,6 +11,7 @@ if [[ ! -f "$work/mbedtls.tar.bz2" ]]; then
 fi
 printf '%s  %s\n' a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6 "$work/mbedtls.tar.bz2" | sha256sum -c -
 tar -xjf "$work/mbedtls.tar.bz2" -C "$work/mbedtls" --strip-components=1
+cp "$root/entware/mbedtls_config.h" "$work/mbedtls/include/mbedtls/mbedtls_config.h"
 cat > "$work/cc" <<WRAPPER
 #!/bin/sh
 exec "$zig_bin" cc -target mipsel-linux-musl -mcpu=mips32r2 -msoft-float "\$@"
@@ -20,13 +21,13 @@ cat > "$work/ar" <<WRAPPER
 exec "$zig_bin" ar "\$@"
 WRAPPER
 chmod +x "$work/cc" "$work/ar"
-cflags="-Os -ffunction-sections -fdata-sections -DMBEDTLS_CONFIG_FILE=\"$root/entware/mbedtls_config.h\""
+cflags="-Os -ffunction-sections -fdata-sections"
 make -C "$work/mbedtls/library" -j2 CC="$work/cc" AR="$work/ar" CFLAGS="$cflags" libmbedcrypto.a
 bundle="$out/usb-root"
 mkdir -p "$bundle/install" "$bundle/heatbridge-entware/bin" "$bundle/heatbridge-entware/licenses"
-# The config macro needs to reach both the application headers and the crypto library.
+# The application uses the same copied minimal configuration as the crypto library.
 "$work/cc" -static -Os -ffunction-sections -fdata-sections -Wl,--gc-sections \
- -DHEATBRIDGE_MBEDTLS "-DMBEDTLS_CONFIG_FILE=\"$root/entware/mbedtls_config.h\"" \
+ -DHEATBRIDGE_MBEDTLS \
  -I"$work/mbedtls/include" "$root/entware/client.c" \
  "$work/mbedtls/library/libmbedcrypto.a" -o "$bundle/heatbridge-entware/bin/heatbridge-syncleo"
 file "$bundle/heatbridge-entware/bin/heatbridge-syncleo"
