@@ -1,0 +1,153 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * EXPERIMENTAL: ZBT WE1626 running Keenetic Omni II NDMS
+ * MT7620N IS A USER-ACCEPTED HYPOTHESIS, NOT READ FROM SILICON.
+ *
+ * Partition map comes directly from more proc:/mtd of this ONE device.
+ * DO NOT FLASH until U-Boot first-install method and GPIO are verified.
+ */
+#include "mt7620n.dtsi"
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/leds/common.h>
+
+/ {
+	compatible = "zbtlink,zbt-we1626-ndms", "ralink,mt7620n-soc";
+	model = "ZBT WE1626 (NDMS partition map, EXPERIMENTAL)";
+
+	aliases {
+		led-boot = &led_status;
+		led-failsafe = &led_status;
+		led-running = &led_status;
+		led-upgrade = &led_status;
+	};
+
+	chosen {
+		bootargs = "console=ttyS0,57600";
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		led_status: status {
+			function = LED_FUNCTION_POWER;
+			color = <LED_COLOR_ID_GREEN>;
+			gpios = <&gpio1 14 GPIO_ACTIVE_LOW>;
+		};
+
+		wifi {
+			function = LED_FUNCTION_WLAN;
+			color = <LED_COLOR_ID_GREEN>;
+			gpios = <&gpio3 0 GPIO_ACTIVE_LOW>;
+		};
+	};
+
+	keys {
+		compatible = "gpio-keys";
+		reset {
+			label = "reset";
+			gpios = <&gpio0 1 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_RESTART>;
+		};
+	};
+};
+
+&gpio1 {
+	status = "okay";
+};
+&gpio3 {
+	status = "okay";
+};
+
+&spi0 {
+	status = "okay";
+
+	flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <10000000>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			partition@0 {
+				label = "u-boot";
+				reg = <0x0 0x30000>;
+				read-only;
+			};
+
+			partition@30000 {
+				label = "u-boot-env";
+				reg = <0x30000 0x10000>;
+				read-only;
+			};
+
+			partition@40000 {
+				label = "factory";
+				reg = <0x40000 0x10000>;
+				read-only;
+				nvmem-layout {
+					compatible = "fixed-layout";
+					#address-cells = <1>;
+					#size-cells = <1>;
+					eeprom_factory_0: eeprom@0 {
+						reg = <0x0 0x200>;
+					};
+					macaddr_factory_4: macaddr@4 {
+						reg = <0x4 0x6>;
+					};
+				};
+			};
+
+			partition@50000 {
+				compatible = "denx,uimage";
+				label = "firmware";
+				reg = <0x50000 0x720000>;
+			};
+
+			partition@770000 {
+				label = "ndms-config";
+				reg = <0x770000 0x10000>;
+				read-only;
+			};
+
+			partition@780000 {
+				label = "ndms-storage";
+				reg = <0x780000 0x80000>;
+				read-only;
+			};
+		};
+	};
+};
+
+&ethernet {
+	pinctrl-names = "default";
+	pinctrl-0 = <&ephy_pins>;
+	nvmem-cells = <&macaddr_factory_4>;
+	nvmem-cell-names = "mac-address";
+
+	/* Closest ZBT WR8305RT/WE2026 routing, NOT measured on this board */
+	mediatek,portmap = "llllw";
+};
+
+&wmac {
+	nvmem-cells = <&eeprom_factory_0>;
+	nvmem-cell-names = "eeprom";
+};
+
+&ehci {
+	status = "okay";
+};
+&ohci {
+	status = "okay";
+};
+
+&state_default {
+	default {
+		groups = "i2c", "spi refclk", "wled";
+		function = "gpio";
+	};
+};
