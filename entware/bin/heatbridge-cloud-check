@@ -1,0 +1,26 @@
+#!/opt/bin/sh
+# Read-only network check. No credentials, installs or configuration changes.
+set -u
+export PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+command -v curl >/dev/null 2>&1 || { echo 'curl is required.' >&2; exit 1; }
+failed=0
+check() {
+ name="$1"
+ url="$2"
+ # Do not follow redirects: a captive portal must not look like this service.
+ # No --fail: 401/403/404 also prove an HTTP service answered over verified TLS.
+ if code="$(curl --proto '=https' --connect-timeout 5 --max-time 10 \
+   -sS -o /dev/null -w '%{http_code}' "$url" 2>/dev/null)"; then
+  case "$code" in
+   [1-5][0-9][0-9]) printf '%s HTTP=%s TLS_OK\n' "$name" "$code";;
+   *) printf '%s NO_VALID_HTTP_RESPONSE\n' "$name"; failed=1;;
+  esac
+ else
+  printf '%s CONNECTION_FAILED\n' "$name"; failed=1
+ fi
+}
+check CloudFunctions https://functions.yandexcloud.net/
+check MessageQueue https://message-queue.api.cloud.yandex.net/
+check ObjectStorage https://storage.yandexcloud.net/
+printf '%s\n' 'This checks endpoint access only; account permissions and actual delivery are not tested.'
+exit "$failed"
