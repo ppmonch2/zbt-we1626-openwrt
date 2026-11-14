@@ -126,6 +126,23 @@ class AliceProtocolTest(unittest.TestCase):
 
 
 class CloudHttpsTest(unittest.TestCase):
+    def test_handler_accepts_raw_json_text_and_bytes_and_rejects_bad_or_large_input(self):
+        diagnostic = {'heatbridge_diagnostic': 'expired_queue_probe'}
+        for raw in (json.dumps(diagnostic), json.dumps(diagnostic).encode(),
+                    bytearray(json.dumps(diagnostic).encode())):
+            with patch('diagnostics.probe', return_value={'diagnostic': 'fixture'}) as probe:
+                self.assertEqual(skill.handler(raw, None), {'diagnostic': 'fixture'})
+                probe.assert_called_once_with()
+        settings = {'HEATBRIDGE_OWNER_LOGIN': 'owner', 'HEATBRIDGE_DEVICES_JSON': '{"h2":"Мансарда"}'}
+        with patch.dict(os.environ, settings, clear=True), \
+             patch('skill.from_environment', return_value=FakeServices()), \
+             patch('skill.process', return_value={'fixture': True}) as process:
+            request = event()
+            self.assertEqual(skill.handler(json.dumps(request).encode(), None), {'fixture': True})
+            self.assertEqual(process.call_args.args[0], request)
+        for raw in ('{broken', b'\xff', ' ' * 16001):
+            self.assertEqual(skill.handler(raw, None)['payload']['error_code'], 'INVALID_ACTION')
+
     def test_console_probe_submits_only_expired_job_and_reports_safe_failures(self):
         client = FakeServices()
         client.acknowledgement = lambda *args: None

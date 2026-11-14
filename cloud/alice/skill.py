@@ -166,6 +166,14 @@ def owner_identifier(settings):
 
 
 def handler(event, context):
+    # Console tests use integration=raw: Python may receive the JSON as text/bytes.
+    if isinstance(event, (str, bytes, bytearray)):
+        if len(event) > 16000:
+            return {'payload': {'error_code': 'INVALID_ACTION'}}
+        try:
+            event = json.loads(event)
+        except (ValueError, UnicodeError):
+            return {'payload': {'error_code': 'INVALID_ACTION'}}
     # This exact console-only envelope cannot supply a live job or credentials.
     # expires_at=0 ensures the router rejects the probe before hardware access.
     if event == {'heatbridge_diagnostic': 'expired_queue_probe'}:
