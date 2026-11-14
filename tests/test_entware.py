@@ -23,7 +23,7 @@ if (p/'fail').exists():sys.exit(1)
 print(json.dumps({'ok':True,'encrypted_session':True,'command_acknowledged':sys.argv[1]!='read','reported_target':22,'current_temperature':21.5,'device_mode':1,'heating_confirmed':False}))
 ''');worker.chmod(0o755)
  def request(self,payload=None,**extra):
-  env=dict(os.environ,HEATBRIDGE_PREFIX=str(self.root),HTTP_HOST='192.168.1.1:8765',REQUEST_METHOD='GET' if payload is None else 'POST',CONTENT_TYPE='application/json',HTTP_X_HEATBRIDGE='1')
+  env=dict(os.environ,HEATBRIDGE_PREFIX=str(self.root),HTTP_HOST='192.168.1.1:8765',HTTP_ORIGIN='http://192.168.1.1:8765',REQUEST_METHOD='GET' if payload is None else 'POST',CONTENT_TYPE='application/json',HTTP_X_HEATBRIDGE='1')
   body='' if payload is None else json.dumps(payload)
   env['CONTENT_LENGTH']=str(len(body.encode()));env.update(extra)
   run=subprocess.run(['sh',str(ROOT/'entware/www/cgi-bin/api')],input=body,text=True,env=env,capture_output=True)
@@ -34,9 +34,12 @@ print(json.dumps({'ok':True,'encrypted_session':True,'command_acknowledged':sys.
   self.assertNotIn(TOKEN,json.dumps(data));self.assertNotIn('aabbccddeeff',json.dumps(data))
   self.assertFalse((self.root/'calls').exists())
  def test_rejects_cross_site_and_form_requests(self):
-  for args in [{'HTTP_ORIGIN':'https://evil.example'},{'HTTP_HOST':'evil.example:8765'},{'HTTP_X_HEATBRIDGE':''},{'CONTENT_TYPE':'application/x-www-form-urlencoded'}]:
+  for args in [{'HTTP_ORIGIN':'https://evil.example'},{'HTTP_HOST':'evil.example:8765'},{'HTTP_ORIGIN':''},{'CONTENT_TYPE':'application/x-www-form-urlencoded'}]:
    data=self.request({'action':'probe','id':'h1'},**args);self.assertFalse(data['ok'])
   self.assertFalse((self.root/'calls').exists())
+ def test_post_works_when_uhttpd_does_not_forward_custom_header(self):
+  data=self.request({'action':'probe','id':'h1'},HTTP_X_HEATBRIDGE='')
+  self.assertTrue(data['ok'])
  def test_configure_only_stores_credentials_and_clears_verification(self):
   data=self.request({'action':'configure','id':'h1','name':'Kitchen','device_id':'001122334455','token':TOKEN})
   self.assertTrue(data['ok']);self.assertFalse(data['heaters'][0]['verified'])

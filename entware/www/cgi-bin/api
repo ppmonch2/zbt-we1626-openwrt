@@ -28,7 +28,8 @@ save() {
 }
 result='null'
 if [ "$method" = POST ]; then
- [ "${HTTP_X_HEATBRIDGE:-}" = 1 ] || error missing_request_header
+ # uhttpd forwards Origin but not arbitrary X-* headers to CGI.
+ [ -n "${HTTP_ORIGIN:-}" ] || error invalid_origin
  case "${CONTENT_TYPE:-}" in application/json*) ;; *) error json_required;; esac
  size="${CONTENT_LENGTH:-}"
  case "$size" in ''|*[!0-9]*) error invalid_length;; esac
