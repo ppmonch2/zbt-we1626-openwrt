@@ -1,4 +1,6 @@
 """Independent encrypted UDP peer for the native C client. No physical heaters."""
+import os
+import shlex
 import hashlib
 import json
 import shutil
@@ -22,7 +24,9 @@ class SyncleoTest(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.binary = str(Path(cls.tmp.name) / 'syncleo')
         subprocess.run(['gcc','-Os','-std=c99','-Wall','-Wextra','-Werror',
-                        str(ROOT / 'native/syncleo/main.c'),'-o',cls.binary,'-lcrypto'],check=True)
+                        *shlex.split(os.environ.get('SYNCLEO_CFLAGS','')),
+                        str(ROOT / 'native/syncleo/main.c'),'-o',cls.binary,
+                        *shlex.split(os.environ.get('SYNCLEO_LIBS','-lcrypto'))],check=True)
 
     @classmethod
     def tearDownClass(cls):

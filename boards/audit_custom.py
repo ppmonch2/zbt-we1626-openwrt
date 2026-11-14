@@ -48,8 +48,9 @@ required=(
 )
 assert all(p in proc.stdout for p in required), "Custom files absent from SquashFS"
 manifest=next(folder.glob('*zbt-we1626-ndms*.manifest')).read_text()
-for pkg in ('luci','kmod-usb2','kmod-usb-net-cdc-ether','kmod-usb-storage','usb-modeswitch','heatbridge-syncleo','libopenssl','umdns'):
+for pkg in ('luci','kmod-usb2','kmod-usb-net-cdc-ether','kmod-usb-storage','usb-modeswitch','heatbridge-syncleo','libmbedtls','umdns'):
     assert re.search(rf'^{re.escape(pkg)} ',manifest,re.M), f"Required package missing: {pkg}"
+assert not re.search(r'^libopenssl(?:[ -])',manifest,re.M), 'OpenSSL must not return to the small-flash image'
 sha=hashlib.sha256(data).hexdigest()
 lines=[
   f"FILE: {f.name}",

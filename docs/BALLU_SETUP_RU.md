@@ -5,7 +5,7 @@
 На сети владельца обнаружены два устройства devtype=46, firmware=1.43, protocol=3,
 public key advertised. Это подтверждение объявления сервиса, но ещё не авторизации
 или работы команд. Свежий образ включает native-клиент heatbridge-syncleo на C и
-libopenssl; Python и Home Assistant в образ не включаются. MQTT, ca-bundle и tcpdump
+libmbedtls; Python и Home Assistant в образ не включаются. MQTT, ca-bundle и tcpdump
 из базовой комплектации убраны ради памяти.
 
 Чтение выполняет только шифрованный handshake и ACK входящих сообщений: без смены

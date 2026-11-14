@@ -12,3 +12,7 @@ The wire protocol uses CBC without a separate MAC. This client checks padding,
 sequence and frame length, and accepts traffic only from the connected UDP peer.
 Do not expose it to untrusted networks. Successful mocked tests do not prove
 compatibility with a physical device.
+
+Production uses Mbed TLS (libmbedtls) to avoid installing OpenSSL on 8 MiB flash.
+OpenSSL remains an optional host-test reference backend. Both backends run against
+independent crypto vectors and the encrypted UDP peer in CI.

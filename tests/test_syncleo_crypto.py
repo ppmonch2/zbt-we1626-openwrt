@@ -1,5 +1,5 @@
 """Independent crypto-vector checks; no network permission required."""
-import hashlib,json,subprocess,tempfile,unittest
+import hashlib,json,subprocess,tempfile,unittest,os,shlex
 from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey,X25519PublicKey
 from cryptography.hazmat.primitives.serialization import Encoding,PublicFormat
@@ -28,7 +28,7 @@ class CryptoTest(unittest.TestCase):
     +'int size=decode(input,n,plain);printf("%d\\n",size); for(int i=0;i<size;i++)printf("%02x",plain[i]); puts("");\n'
     +'input[0]^=1; if(decode(input,n,plain)>=0)return 4;\n'
     +'if(decode(input,3,plain)>=0)return 5; return 0; }\n')
-   subprocess.run(['gcc','-Os','-std=c99',str(src),'-lcrypto','-o',str(exe)],check=True)
+   subprocess.run(['gcc','-Os','-std=c99',*shlex.split(os.environ.get('SYNCLEO_CFLAGS','')),str(src),*shlex.split(os.environ.get('SYNCLEO_LIBS','-lcrypto')),'-o',str(exe)],check=True)
    proc=subprocess.Popen([str(exe)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
    own=bytes.fromhex(proc.stdout.readline().strip())
    frame=bytes.fromhex(proc.stdout.readline().strip())

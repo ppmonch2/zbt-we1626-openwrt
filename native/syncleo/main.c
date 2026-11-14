@@ -4,8 +4,10 @@
  */
 #define _POSIX_C_SOURCE 200809L
 #include <arpa/inet.h>
+#ifndef HEATBRIDGE_MBEDTLS
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
+#endif
 #include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -31,6 +33,9 @@ static int line(char *s, size_t n) {
     if(!fgets(s,(int)n,stdin)) return 0;
     size_t k=strcspn(s,"\r\n"); if(k==n-1) return 0; s[k]=0; return 1;
 }
+#ifdef HEATBRIDGE_MBEDTLS
+#include "crypto_mbedtls.h"
+#else
 static int aes(int encrypt, const unsigned char *key, const unsigned char *iv,
         const unsigned char *in, int len, unsigned char *out, int padding) {
     EVP_CIPHER_CTX *c=EVP_CIPHER_CTX_new(); int n=0,m=0,ok=0;
@@ -58,6 +63,7 @@ end:
     OPENSSL_cleanse(raw,sizeof(raw)); OPENSSL_cleanse(shared,sizeof(shared)); OPENSSL_cleanse(digest,sizeof(digest));
     EVP_PKEY_CTX_free(gen); EVP_PKEY_CTX_free(derive); EVP_PKEY_free(local); EVP_PKEY_free(remote); return ok;
 }
+#endif
 static void rotate(const unsigned char *in, unsigned char *out, int n) { for(int i=0;i<16;i++) out[i]=in[(i+n)%16]; }
 static int frame(unsigned char seq,unsigned char type,const unsigned char *payload,int len,unsigned char *out) {
     unsigned char k[16],iv[16],plain[CAP];
