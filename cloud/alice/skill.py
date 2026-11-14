@@ -166,6 +166,11 @@ def owner_identifier(settings):
 
 
 def handler(event, context):
+    # This exact console-only envelope cannot supply a live job or credentials.
+    # expires_at=0 ensures the router rejects the probe before hardware access.
+    if event == {'heatbridge_diagnostic': 'expired_queue_probe'}:
+        from diagnostics import probe
+        return probe()
     try:
         owner = owner_identifier(os.environ)
         names = json.loads(os.environ['HEATBRIDGE_DEVICES_JSON'])

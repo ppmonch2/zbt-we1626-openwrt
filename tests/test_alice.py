@@ -126,6 +126,24 @@ class AliceProtocolTest(unittest.TestCase):
 
 
 class CloudHttpsTest(unittest.TestCase):
+    def test_console_probe_submits_only_expired_job_and_reports_safe_failures(self):
+        client = FakeServices()
+        client.acknowledgement = lambda *args: None
+        with patch('diagnostics.from_environment', return_value=client):
+            result = skill.handler({'heatbridge_diagnostic': 'expired_queue_probe'}, None)
+        self.assertFalse(result['heater_control'])
+        self.assertEqual(result['queue_send']['status'], 'OK')
+        self.assertEqual(result['ack_read'], {'status': 'OK', 'object_found': False})
+        self.assertEqual(len(client.jobs), 1)
+        self.assertEqual(client.jobs[0]['expires_at'], 0)
+        with patch('diagnostics.from_environment', side_effect=KeyError('fixture-secret')):
+            self.assertEqual(skill.handler({'heatbridge_diagnostic': 'expired_queue_probe'}, None)
+                             ['configuration'], 'invalid')
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(skill.handler({'heatbridge_diagnostic': 'expired_queue_probe',
+                                           'expires_at': time.time()+1}, None)
+                             ['payload']['error_code'], 'INTERNAL_ERROR')
+
     def test_submit_failure_logs_stage_and_cloud_code_without_credentials(self):
         for code in ('AccessDeniedException', 'fixture-secret'):
             def opener(req, timeout):

@@ -12,7 +12,7 @@ OUT = ROOT.parent/'output-alice'
 def main():
     OUT.mkdir(exist_ok=True)
     with zipfile.ZipFile(OUT/'Ballu-Alice-Function.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
-        for name in ('skill.py', 'yandex_services.py'):
+        for name in ('skill.py', 'yandex_services.py', 'diagnostics.py'):
             archive.write(ROOT/'alice'/name, name)
     with tempfile.TemporaryDirectory() as tmp:
         bundle = Path(tmp)/'heatbridge-alice'
