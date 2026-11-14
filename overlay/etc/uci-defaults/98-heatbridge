@@ -8,6 +8,8 @@ uci set uhttpd.heatbridge.cgi_prefix='/cgi-bin'
 uci set uhttpd.heatbridge.config='/etc/heatbridge/httpd.conf'
 uci set uhttpd.heatbridge.disabled='1'
 uci commit uhttpd
-# MQTT is not used until the true BALLU protocol and credentials are checked.
+# Broker remains disabled until a local connection is configured.
+chmod 600 /etc/config/heatbridge
 [ -x /etc/init.d/mosquitto ] && /etc/init.d/mosquitto disable 2>/dev/null || true
 exit 0
+

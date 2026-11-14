@@ -1,0 +1,44 @@
+#!/bin/sh
+# A configurable MQTT transport, not an assumption about a particular Ballu firmware.
+# Connection settings and exact topics must be verified locally first.
+set -eu
+get() { uci -q get "heatbridge.$1.$2" 2>/dev/null || true; }
+fail() { echo "$1" >&2; exit 1; }
+action="${1:-}"; id="${2:-}"; value="${3:-}"
+case "$id" in h1|h2|h3|h4) ;; *) fail invalid_heater;; esac
+[ "$(get main mode)" = mqtt ] || fail mqtt_not_enabled
+[ "$(get "$id" protocol_verified)" = 1 ] || fail heater_protocol_not_verified
+host="$(get main mqtt_host)"; port="$(get main mqtt_port)"
+case "$host" in ''|-*|*[!a-zA-Z0-9.:-]*) fail invalid_broker;; esac
+case "$port" in ''|*[!0-9]*) fail invalid_port;; esac
+[ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail invalid_port
+case "$action" in
+  send) topic="$(get "$id" command_topic)";;
+  read) topic="$(get "$id" state_topic)";;
+  *) fail invalid_action;;
+esac
+case "$topic" in ''|-*|*'+'*|*'#'*|*[!a-zA-Z0-9_./:-]*) fail invalid_topic;; esac
+[ "${#topic}" -le 256 ] || fail invalid_topic
+set -- -h "$host" -p "$port" -q 1
+user="$(get main mqtt_username)"; password="$(get main mqtt_password)"
+[ -z "$user" ] || set -- "$@" -u "$user" -P "$password"
+if [ "$(get main mqtt_tls)" = 1 ]; then
+  set -- "$@" --cafile /etc/ssl/certs/ca-certificates.crt
+elif [ "$host" != 127.0.0.1 ] && [ "$(get main allow_plain_lan)" != 1 ]; then
+  fail tls_or_explicit_plain_lan_required
+fi
+case "$action" in
+  send)
+    case "$value" in ''|*[!0-9]*) fail invalid_temperature;; esac
+    [ "$value" -ge 5 ] && [ "$value" -le 30 ] || fail invalid_temperature
+    # Deliberately no retained flag: never replay heating commands on reconnect.
+    mosquitto_pub "$@" -t "$topic" -m "$value" -W 5 || fail mqtt_publish_failed
+    ;;
+  read)
+    # Ignore retained messages. A timeout means no fresh report, not device failure.
+    value="$(mosquitto_sub "$@" -t "$topic" -R -C 1 -W 2 2>/dev/null)" || fail no_fresh_state
+    # This transport accepts only a decimal target temperature, not arbitrary JSON.
+    case "$value" in ''|*[!0-9.]*|*.*.*) fail unsupported_state_format;; esac
+    awk -v n="$value" 'BEGIN {if (n < 5 || n > 35) exit 1; printf "%g\n", n}' || fail invalid_state
+    ;;
+esac

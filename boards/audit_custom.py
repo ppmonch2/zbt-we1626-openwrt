@@ -41,10 +41,12 @@ required=(
     'www/heatbridge/index.html',
     'www/heatbridge/cgi-bin/api',
     'etc/hotplug.d/net/90-dh-zte-wan',
+    'usr/sbin/heatbridge-mqtt',
+    'usr/sbin/heatbridge-discover',
 )
 assert all(p in proc.stdout for p in required), "Custom files absent from SquashFS"
 manifest=next(folder.glob('*zbt-we1626-ndms*.manifest')).read_text()
-for pkg in ('luci','kmod-usb2','kmod-usb-net-cdc-ether','kmod-usb-storage','usb-modeswitch'):
+for pkg in ('luci','kmod-usb2','kmod-usb-net-cdc-ether','kmod-usb-storage','usb-modeswitch','mosquitto-ssl','mosquitto-client-ssl','ca-bundle','umdns','tcpdump-mini'):
     assert re.search(rf'^{re.escape(pkg)} ',manifest,re.M), f"Required package missing: {pkg}"
 sha=hashlib.sha256(data).hexdigest()
 lines=[
@@ -60,3 +62,4 @@ lines=[
 ]
 (folder/"CUSTOM_PRE_FLIGHT.txt").write_text('\n'.join(lines)+'\n')
 print('\n'.join(lines))
+

@@ -14,5 +14,6 @@ uci -q get uhttpd.heatbridge >/dev/null || { echo 'Heatbridge uhttpd section mis
 uci set uhttpd.heatbridge.disabled='0'
 uci commit uhttpd
 /etc/init.d/uhttpd restart
-echo 'Dacha Heat Bridge (SIMULATION ONLY) available at http://192.168.1.1:8765/'
+echo 'Dacha Heat Bridge (transport configured separately) available at http://192.168.1.1:8765/'
 echo 'Authentication: root and configured router password. Never forward port 8765 to WAN.'
+

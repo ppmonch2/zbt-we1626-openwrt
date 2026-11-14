@@ -10,11 +10,11 @@ input[type=number]{width:70px;border:1px solid #bbb;border-radius:4px}
 #status{font-size:14px}.muted{color:#666;font-size:14px}
 </style></head><body>
 <h1>Dacha Heat Bridge</h1>
-<p><strong>Режим проверки.</strong> Настройки сохраняются на роутере. Команды реальным BALLU не отправляются до проверки протокола и авторизации.</p>
+<p id="transport">Проверка подключения…</p>
 <p id="status">Подключение к локальному серверу…</p>
-<div><button id="away">Уехал · 12 °C</button><button id="arrive">Еду на дачу · 22 °C</button><button id="refresh">Обновить</button></div>
+<div><button id="away">Уехал · 12 °C</button><button id="arrive">Еду на дачу · 22 °C</button><button id="refresh">Обновить</button><button id="probe">Прочитать состояние приборов</button></div>
 <div id="heaters"></div>
-<p class="muted">Значение «Задано» — запись в сервере, а не подтверждение нагрева. Интернет и HOMMYN не нужны для этого тестового экрана.</p>
+<p class="muted">Уставка не подтверждает нагрев. Изменение температуры не включает выключенный прибор. После отправки проверьте состояние. Настройка связи и обновление сервера не требуют перепрошивки роутера.</p>
 <script>
 'use strict';
 const area=document.getElementById('heaters'),status=document.getElementById('status');
@@ -25,14 +25,15 @@ async function request(data){
  return payload;
 }
 function view(data){
- status.textContent=data.real_commands_sent?'Отправка команд включена':'Локальный сервер отвечает. Реальные команды отключены.';
+ document.getElementById('transport').textContent=data.mode==='mqtt'?'Управление через настроенный MQTT.':'Режим проверки: команды приборам отключены. Сначала настройте связь.';
+ status.textContent=data.heaters.some(h=>h.delivery==='failed')?'Часть команд не отправлена. Смотрите состояние каждого прибора.':data.real_commands_sent?'Команды опубликованы в MQTT. Принятие приборами ещё не подтверждено.':'Локальный сервер отвечает.';
  area.replaceChildren();
  data.heaters.forEach(h=>{
   const card=document.createElement('article');
   const title=document.createElement('h2');title.textContent=h.name;card.append(title);
   const name=document.createElement('input');name.type='text';name.maxLength=32;name.value=h.name;name.setAttribute('aria-label','Имя обогревателя');
   const temp=document.createElement('input');temp.type='number';temp.min='5';temp.max='30';temp.step='1';temp.value=h.temp;temp.setAttribute('aria-label','Температура');
-  const save=document.createElement('button');save.textContent='Сохранить';
+  const save=document.createElement('button');save.textContent=data.mode==='mqtt'?'Отправить':'Сохранить для проверки';
   save.onclick=async()=>{
     const n=Number(temp.value);if(!Number.isInteger(n)||n<5||n>30){status.textContent='Допустимы только целые 5–30 °C';return;}
     if(!name.value.trim()||name.value.length>32){status.textContent='Введите название до 32 символов';return;}
@@ -40,7 +41,7 @@ function view(data){
     catch(e){status.textContent=e.message;}
   };
   card.append(name,document.createTextNode('  °C '),temp,save);
-  const note=document.createElement('p');note.className='muted';note.textContent='Не подтверждено физическим прибором';card.append(note);
+  const note=document.createElement('p');note.className='muted';note.textContent=h.delivery==='failed'?'Ошибка отправки: проверьте подключение и настройки MQTT.':h.reported_target!=null?'Свежая уставка от прибора: '+h.reported_target+' °C (не подтверждает нагрев).':h.delivery==='published'?'Опубликовано. Ожидает проверки на приборе.':'Свежих данных от прибора нет.';card.append(note);
   area.append(card);
  });
 }
@@ -49,5 +50,7 @@ for(const [id,preset] of [['away','away'],['arrive','arrive']]){
  document.getElementById(id).onclick=async()=>{try{view(await request({action:'mode',preset}))}catch(e){status.textContent='Ошибка: '+e.message;}};
 }
 document.getElementById('refresh').onclick=refresh;
+document.getElementById('probe').onclick=async()=>{try{status.textContent='Ожидаю свежие данные, до 8 секунд…';view(await request({action:'probe'}))}catch(e){status.textContent=e.message;}};
 refresh();
 </script></body></html>
+

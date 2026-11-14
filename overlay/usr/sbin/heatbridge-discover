@@ -1,0 +1,10 @@
+#!/bin/sh
+# Read-only discovery. Does not change DNS, pair devices, or send heating commands.
+set -eu
+echo '=== Syncleo mDNS services (router and heaters must share the LAN) ==='
+ubus call umdns browse 2>/dev/null || {
+  echo 'Start discovery with /etc/init.d/umdns start, then retry.' >&2
+  exit 1
+}
+echo '=== DHCP leases ==='
+cat /tmp/dhcp.leases 2>/dev/null || true

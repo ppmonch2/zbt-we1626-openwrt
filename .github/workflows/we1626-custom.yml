@@ -31,6 +31,10 @@ jobs:
           python3 -m py_compile boards/patch_openwrt.py boards/audit_custom.py
           sh -n overlay/etc/uci-defaults/99-heatbridge-open-setup
           sh -n overlay/etc/uci-defaults/98-heatbridge
+          sh -n overlay/usr/sbin/heatbridge-mqtt
+          sh -n overlay/usr/sbin/heatbridge-discover
+          sh -n overlay/www/heatbridge/cgi-bin/api
+          python3 -m unittest discover -s tests -v
       - name: Compile dedicated WE1626 experimental MT7620N target
         run: bash ./boards/build_custom.sh
       - name: Audit partition boundaries, kernel CRC, footer and embedded tools
@@ -43,3 +47,4 @@ jobs:
           path: output-custom/
           retention-days: 7
           if-no-files-found: warn
+
