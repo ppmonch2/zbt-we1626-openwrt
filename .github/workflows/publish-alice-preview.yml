@@ -8,7 +8,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: alice-preview-0.1.0
+  group: alice-preview-0.1.1
   cancel-in-progress: false
 jobs:
   publish:
@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 5f04639c44a9ccc8666b4b16e60cbd51890cddef
+          ref: 31217918dc4528d9112471d59d1e9b9aeb393c67
       - name: Test and package the reviewed preview source
         run: |
           python3 -m unittest discover -s tests -p test_alice.py -v
@@ -31,12 +31,12 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if gh release view ballu-alice-preview-v0.1.0 >/dev/null 2>&1; then
+          if gh release view ballu-alice-preview-v0.1.1 >/dev/null 2>&1; then
             echo 'Preview already exists; refusing to replace published files.'
             exit 1
           fi
-          gh release create ballu-alice-preview-v0.1.0 \
+          gh release create ballu-alice-preview-v0.1.1 \
             output-alice/Ballu-Alice-Function.zip output-alice/Ballu-Alice-Router.tar.gz output-alice/SHA256SUMS \
-            --target 5f04639c44a9ccc8666b4b16e60cbd51890cddef \
-            --prerelease --title 'Ballu direct Alice bridge 0.1.0 — cloud setup preview' \
-            --notes 'Preview for manual cloud setup. 17 offline tests pass. Cloud resources, owner OAuth binding, delivery through Yandex and real router latency are not yet verified. The router installer does not start the agent. No credentials are included. See cloud/README_RU.md in the tagged source.'
+            --target 31217918dc4528d9112471d59d1e9b9aeb393c67 \
+            --prerelease --title 'Ballu direct Alice bridge 0.1.1 — cloud setup preview' \
+            --notes 'Preview for manual cloud setup. 19 offline tests pass. Cloud resources, owner OAuth binding, delivery through Yandex and real router latency are not yet verified. The router installer does not start the agent. No credentials are included. See cloud/README_RU.md in the tagged source.'
