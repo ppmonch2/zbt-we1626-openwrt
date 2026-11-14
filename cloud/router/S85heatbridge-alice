@@ -1,0 +1,28 @@
+#!/opt/bin/sh
+set -eu
+export PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+pidfile=/tmp/heatbridge-alice.pid
+agent=/opt/bin/heatbridge-alice
+running() {
+ [ -s "$pidfile" ] || return 1
+ pid="$(cat "$pidfile")"
+ case "$pid" in ''|*[!0-9]*) return 1;; esac
+ [ -r "/proc/$pid/cmdline" ] && tr '\0' ' ' < "/proc/$pid/cmdline" | grep -Fq "$agent"
+}
+case "${1:-}" in
+ start)
+  if running; then echo 'Alice agent is already running.'; exit 0; fi
+  [ -s /opt/etc/heatbridge/alice.json ] || { echo 'Private alice.json is required.' >&2; exit 1; }
+  "$agent" >/tmp/heatbridge-alice.log 2>&1 &
+  printf '%s\n' "$!" > "$pidfile"
+  sleep 1
+  running || { echo 'Alice agent did not start. See /tmp/heatbridge-alice.log.' >&2; exit 1; }
+  echo 'Alice agent is running. End-to-end delivery still requires a test.'
+  ;;
+ stop)
+  if running; then kill "$pid"; fi
+  rm -f "$pidfile"
+  ;;
+ status) running;;
+ *) echo 'Usage: S85heatbridge-alice {start|stop|status}' >&2; exit 1;;
+esac

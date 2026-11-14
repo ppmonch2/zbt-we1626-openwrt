@@ -1,0 +1,49 @@
+#!/opt/bin/sh
+# One queue job on stdin. No secrets on stdout; durable at-most-once claims on USB.
+set -eu
+umask 077
+export PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+base="${HEATBRIDGE_PREFIX:-/opt}"
+state="$base/var/lib/heatbridge-alice/requests"
+mkdir -p "$state"
+chmod 700 "$state"
+job="$(head -c 2049)"
+[ "${#job}" -le 2048 ] || exit 1
+printf '%s' "$job" | jq -e '
+ type=="object" and (.id|type=="string" and test("^[a-f0-9]{64}$")) and
+ (.heater=="h1" or .heater=="h2" or .heater=="h3" or .heater=="h4") and
+ (.value|type=="number" and .==floor) and
+ ((.action=="set" and .value>=5 and .value<=30) or
+  (.action=="mode" and (.value==0 or .value==1))) and
+ (.expires_at|type=="number" and .>now and .<=now+4)
+' >/dev/null 2>&1 || exit 1
+id="$(printf '%s' "$job" | jq -r .id)"
+record="$state/$id"
+if ! mkdir "$record" 2>/dev/null; then
+ # A crashed/in-progress claim is deliberately never executed again.
+ if [ -s "$record/result.json" ]; then cat "$record/result.json"; else
+  printf '%s' "$job" | jq -c '{id,heater,action,value,ok:false,error:"already_claimed_may_have_been_applied"}'
+ fi
+ exit 0
+fi
+printf '%s\n' "$job" > "$record/job.json"
+printf '%s' "$job" | jq -c '{id,heater,action,value,ok:false,error:"unconfirmed_may_have_been_applied"}' > "$record/result.json"
+heater="$(printf '%s' "$job" | jq -r .heater)"
+action="$(printf '%s' "$job" | jq -r .action)"
+value="$(printf '%s' "$job" | jq -r .value)"
+if printf '%s' "$job" | jq -e '.expires_at>now' >/dev/null &&
+ jq -e --arg id "$heater" '.heaters[$id].verified==true' "$base/etc/heatbridge/config.json" >/dev/null 2>&1 &&
+ "$base/bin/heatbridge-device" "$action" "$heater" "$value" > "$record/device.json" 2>/dev/null; then
+ if jq -e --arg action "$action" --argjson value "$value" '
+   .encrypted_session==true and .command_acknowledged==true and .state_echo_matches_request==true and
+   (if $action=="set" then .reported_target==$value else .device_mode==$value end)
+  ' "$record/device.json" >/dev/null 2>&1; then
+  jq -c --slurpfile result "$record/device.json" \
+   '{id,heater,action,value,ok:true,observed_at:now,result:($result[0]|{
+     encrypted_session,command_acknowledged,state_echo_matches_request,reported_target,
+     device_mode,current_temperature,heating_confirmed:false})}' \
+   "$record/job.json" > "$record/result.new"
+  mv "$record/result.new" "$record/result.json"
+ fi
+fi
+cat "$record/result.json"

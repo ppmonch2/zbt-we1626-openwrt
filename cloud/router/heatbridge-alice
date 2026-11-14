@@ -1,0 +1,69 @@
+#!/opt/bin/sh
+# Outbound-only long polling. Requires curl with AWS SigV4 and existing jq.
+set -eu
+umask 077
+export PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+base="${HEATBRIDGE_PREFIX:-/opt}"
+config="$base/etc/heatbridge/alice.json"
+runtime="${HEATBRIDGE_ALICE_RUNTIME:-/tmp/heatbridge-alice}"
+mkdir -p "$runtime"
+chmod 700 "$runtime"
+trap '' HUP
+trap 'exit 0' INT TERM
+curl -q --help all | grep -q -- '--aws-sigv4' || { echo 'curl with AWS SigV4 is required.' >&2; exit 1; }
+jq -e '
+ (.queue_url|type=="string" and test("^https://message-queue\\.api\\.cloud\\.yandex\\.net/[A-Za-z0-9_./-]+$")) and
+ (.ack_bucket|type=="string" and test("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")) and
+ (.access_key|type=="string" and test("^[A-Za-z0-9_+=/.-]{10,200}$")) and
+ (.secret_key|type=="string" and test("^[A-Za-z0-9_+=/.-]{10,200}$"))
+' "$config" >/dev/null || { echo 'Invalid alice.json' >&2; exit 1; }
+queue="$(jq -r .queue_url "$config")"
+bucket="$(jq -r .ack_bucket "$config")"
+# Curl reads the credentials from a private file, never from argv.
+jq -r '"user = \"" + .access_key + ":" + .secret_key + "\""' "$config" > "$runtime/curl.conf"
+chmod 600 "$runtime/curl.conf"
+http() {
+ curl -q --config "$runtime/curl.conf" --proto '=https' --connect-timeout 5 \
+  --max-time 25 --max-filesize 131072 -fsS "$@" 2>/dev/null
+}
+sqs() {
+ queue_action="$1"
+ shift
+ http --aws-sigv4 'aws:amz:ru-central1:sqs' \
+  --data-urlencode "Action=$queue_action" --data-urlencode 'Version=2012-11-05' \
+  --data-urlencode "QueueUrl=$queue" "$@" \
+  https://message-queue.api.cloud.yandex.net/
+}
+while :; do
+ if ! sqs ReceiveMessage --data-urlencode 'MaxNumberOfMessages=1' \
+      --data-urlencode 'WaitTimeSeconds=20' > "$runtime/reply.xml"; then
+  printf '%s\n' 'queue_connection_failed' > "$runtime/status"
+  sleep 5
+  continue
+ fi
+ printf '%s\n' 'waiting_for_commands' > "$runtime/status"
+ # Message bodies are base64: no XML entities in Body or ReceiptHandle are accepted.
+ tr -d '\r\n' < "$runtime/reply.xml" > "$runtime/flat.xml"
+ receipt="$(sed -n 's:.*<ReceiptHandle>\([^<]*\)</ReceiptHandle>.*:\1:p' "$runtime/flat.xml")"
+ [ -n "$receipt" ] || continue
+ case "$receipt" in *[!A-Za-z0-9+/=_-]*) sleep 1; continue;; esac
+ encoded="$(sed -n 's:.*<Body>\([^<]*\)</Body>.*:\1:p' "$runtime/flat.xml")"
+ # Acknowledge queue ownership before invoking hardware. If deletion fails, do not act.
+ if ! sqs DeleteMessage --data-urlencode "ReceiptHandle=$receipt" > "$runtime/delete.xml"; then continue; fi
+ grep -q '<DeleteMessageResponse' "$runtime/delete.xml" || continue
+ case "$encoded" in ''|*[!A-Za-z0-9+/=]*) continue;; esac
+ [ "${#encoded}" -le 2800 ] || continue
+ if ! printf '%s' "$encoded" | base64 -d > "$runtime/job.json" 2>/dev/null; then continue; fi
+ if ! "$base/bin/heatbridge-alice-worker" < "$runtime/job.json" > "$runtime/ack.json"; then continue; fi
+ id="$(jq -r '.id // empty' "$runtime/ack.json")"
+ case "$id" in ''|*[!a-f0-9]*) continue;; esac
+ [ "${#id}" = 64 ] || continue
+ if ! http --max-time 5 --aws-sigv4 'aws:amz:ru-central1:s3' -X PUT \
+   -H 'Content-Type: application/json' --data-binary "@$runtime/ack.json" \
+   "https://storage.yandexcloud.net/$bucket/acks/$id.json" > /dev/null; then
+  printf '%s\n' 'ack_upload_failed_command_may_have_been_applied' > "$runtime/status"
+ fi
+ # Stale jobs expire in seconds. Keep at-most-once claims for two full days.
+ find "$base/var/lib/heatbridge-alice/requests" -type f -mtime +2 -exec rm -f '{}' \;
+ find "$base/var/lib/heatbridge-alice/requests" -mindepth 1 -maxdepth 1 -type d -exec rmdir '{}' \; 2>/dev/null || true
+done

@@ -1,0 +1,28 @@
+name: Ballu direct Alice bridge checks
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - cloud/**
+      - tests/test_alice.py
+      - .github/workflows/alice-check.yml
+permissions:
+  contents: read
+jobs:
+  check-and-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate optional router scripts and cloud provider
+        run: |
+          for script in cloud/router/*; do sh -n "$script"; done
+          python3 -m unittest discover -s tests -p test_alice.py -v
+          python3 cloud/package.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ballu-Alice-Bridge-Preview
+          path: output-alice/
+          retention-days: 14
+          if-no-files-found: error
