@@ -11,7 +11,7 @@ action="${1:-}"; id="${2:-}"; value="${3:-}"
 case "$id" in h1|h2|h3|h4) ;; *) exit 1;; esac
 case "$action" in
  read) ;;
- set) case "$value" in ''|*[!0-9]*) exit 1;; esac; [ "$value" -ge 5 ] && [ "$value" -le 30 ] || exit 1;;
+ set) case "$value" in ''|*[!0-9]*) exit 1;; esac; [ "$value" -ge 10 ] && [ "$value" -le 35 ] || exit 1;;
  mode) case "$value" in 0|1|2|3) ;; *) exit 1;; esac;;
  *) exit 1;;
 esac
