@@ -104,6 +104,16 @@ class MdnsParserTest(unittest.TestCase):
   cls.lib=ctypes.CDLL(str(p/'parser.so'));cls.lib.parse.argtypes=[ctypes.c_char_p,ctypes.c_int,ctypes.POINTER(ctypes.c_int),ctypes.c_char_p,ctypes.c_int]
  @classmethod
  def tearDownClass(cls):cls.tmp.cleanup()
+ def test_native_client_accepts_10_to_35_and_rejects_outside(self):
+  native=Path(self.tmp.name)/'heatbridge-syncleo-test'
+  subprocess.run(['gcc','-Os',str(ROOT/'native/syncleo/main.c'),'-lcrypto',
+                  '-o',str(native)],check=True)
+  for value in (9, 10, 30, 31, 35, 36):
+   run=subprocess.run([str(native),'set',str(value)],input='',
+                      capture_output=True,text=True)
+   expected='invalid_temperature' if value in (9,36) else 'invalid_connection_settings'
+   self.assertIn(expected,run.stderr,(value,run.stderr))
+
  def test_valid_compressed_name_and_updated_offset(self):
   data=b'\x03abc\x05local\0\xc0\x00';pos=ctypes.c_int(11);out=ctypes.create_string_buffer(100)
   self.assertEqual(self.lib.parse(data,len(data),ctypes.byref(pos),out,len(out)),1)
