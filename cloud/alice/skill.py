@@ -5,7 +5,7 @@ import os
 import re
 import time
 
-from device_state import FLOAT, STATE_MAX_AGE, observed_state, supported
+from device_state import FLOAT, STATE_MAX_AGE, observed_setpoint, observed_state, supported
 
 from yandex_services import ServiceError, error_details, from_environment, cached_owner_authorized
 
@@ -166,10 +166,9 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
                                 snapshot = reader(deadline)
                             except ServiceError:
                                 snapshot = None
-                        measured = observed_state(snapshot, heater)
-                        if measured is None:
+                        relative_target = observed_setpoint(snapshot, heater)
+                        if relative_target is None:
                             raise ValueError('DEVICE_UNREACHABLE')
-                        relative_target = measured['capabilities'][1]['state']['value']
                 action, value = command(capability, relative_target)
             except ValueError as exc:
                 result['state']['action_result'] = failure(str(exc))
