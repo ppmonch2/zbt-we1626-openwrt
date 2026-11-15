@@ -5,12 +5,14 @@ import os
 import re
 import time
 
-from yandex_services import ServiceError, error_details, from_environment, owner_authorized
+from yandex_services import ServiceError, error_details, from_environment, cached_owner_authorized
 
 RANGE = 'devices.capabilities.range'
 POWER = 'devices.capabilities.on_off'
 IDS = {'h1', 'h2', 'h3', 'h4'}
-RESPONSE_BUDGET = 2.65
+# Keep 200 ms of Alice's three-second window for dispatch/serialization/network.
+RESPONSE_BUDGET = 2.8
+VERSION = '0.1.8'
 
 
 def failure(code, message=None):
@@ -61,7 +63,7 @@ def catalog(names):
             for key, name in names.items()]
 
 
-def process(event, names, owner_uid, services, authorize=owner_authorized):
+def process(event, names, owner_uid, services, authorize=cached_owner_authorized):
     deadline = time.monotonic() + RESPONSE_BUDGET
     if not isinstance(event, dict) or len(json.dumps(event)) > 16000:
         return {'payload': {'error_code': 'INVALID_ACTION'}}
@@ -72,7 +74,7 @@ def process(event, names, owner_uid, services, authorize=owner_authorized):
         return {'payload': {'error_code': 'INVALID_ACTION'}}
     response = {'request_id': request_id}
     def trace(stage, **details):
-        print(json.dumps({'request_id': request_id, 'stage': stage,
+        print(json.dumps({'request_id': request_id, 'stage': stage, 'version': VERSION,
                           'elapsed_ms': round((time.monotonic() - deadline + RESPONSE_BUDGET) * 1000),
                           **details}))
     if not authorize(headers.get('authorization'), owner_uid, deadline):
@@ -178,6 +180,11 @@ def handler(event, context):
             event = json.loads(event)
         except (ValueError, UnicodeError):
             return {'payload': {'error_code': 'INVALID_ACTION'}}
+    if event == {'heatbridge_diagnostic': 'version'}:
+        return {'version': VERSION, 'heater_control': False,
+                'parallel_ack_connection': True, 'owner_check_cache_seconds': 30,
+                'response_budget_seconds': RESPONSE_BUDGET,
+                'state_reporting': False, 'router_update_required': False}
     # This exact console-only envelope cannot supply a live job or credentials.
     # expires_at=0 ensures the router rejects the probe before hardware access.
     if event == {'heatbridge_diagnostic': 'expired_queue_probe'}:

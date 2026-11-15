@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -70,11 +71,49 @@ class KeepAliveHTTPS:
     """Reuse TLS connections while polling, including after a pending S3 404."""
     def __init__(self):
         self.connections = {}
+        self.preparing = None
+        self.closed = False
+        self.lock = threading.Lock()
+
+    def prepare_acknowledgements(self, deadline):
+        """Open the S3 TLS connection concurrently with the first queue POST.
+
+        No command or HTTP request is issued by this thread. A failed warm-up
+        is only an optimisation miss; the regular signed GET can still proceed.
+        """
+        if self.preparing is not None:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        def connect():
+            connection = http.client.HTTPSConnection('storage.yandexcloud.net',
+                                                     timeout=min(.65, remaining))
+            try:
+                connection.connect()
+            except (OSError, http.client.HTTPException):
+                connection.close()
+                return
+            with self.lock:
+                if self.closed:
+                    connection.close()
+                else:
+                    self.connections['storage.yandexcloud.net'] = connection
+        self.preparing = threading.Thread(target=connect, daemon=True)
+        self.preparing.start()
+
+    def await_acknowledgements(self, deadline):
+        if self.preparing is not None:
+            self.preparing.join(max(0, deadline - time.monotonic()))
+            if self.preparing.is_alive():
+                raise ServiceError('deadline')
 
     def close(self):
-        for connection in self.connections.values():
-            connection.close()
-        self.connections.clear()
+        with self.lock:
+            self.closed = True
+            for connection in self.connections.values():
+                connection.close()
+            self.connections.clear()
 
     def __call__(self, request, timeout):
         parsed = urllib.parse.urlsplit(request.full_url)
@@ -150,6 +189,8 @@ class Services:
             raise ServiceError('cloud_connection_error', service=service) from None
 
     def submit(self, job, deadline):
+        if isinstance(self.opener, KeepAliveHTTPS):
+            self.opener.prepare_acknowledgements(deadline)
         # Query protocol is supported by YMQ; do not assume AWS's newer JSON API.
         encoded = base64.b64encode(json.dumps(job, separators=(',', ':')).encode()).decode()
         body = urllib.parse.urlencode({'Action': 'SendMessage', 'Version': '2012-11-05',
@@ -165,6 +206,8 @@ class Services:
     def acknowledgement(self, job_id, deadline):
         if not re.fullmatch(r'[a-f0-9]{64}', job_id):
             raise ValueError('Invalid job ID')
+        if isinstance(self.opener, KeepAliveHTTPS):
+            self.opener.await_acknowledgements(deadline)
         url = f'https://storage.yandexcloud.net/{self.bucket}/acks/{job_id}.json'
         data = self.request('GET', url, b'', 's3', deadline)
         if data is None:
@@ -198,6 +241,37 @@ def owner_authorized(authorization, owner_uid, deadline, opener=urllib.request.u
             return str(info['id']) == owner_uid
     except (OSError, ValueError, UnicodeError):
         return False
+
+
+# A card refresh normally authenticates the same owner immediately before an
+# action. Reuse only a successful identity check for 30 seconds in this process.
+# Keys hold a token digest, never the bearer token. Revocation takes effect no
+# later than the TTL; changes to the configured owner never share an entry.
+_owner_checks = {}
+_owner_checks_lock = threading.Lock()
+OWNER_CACHE_SECONDS = 30
+
+
+def cached_owner_authorized(authorization, owner_uid, deadline):
+    if (not isinstance(authorization, str) or
+            not re.fullmatch(r'Bearer [^\s]{1,2048}', authorization) or
+            time.monotonic() >= deadline):
+        return False
+    key = (owner_uid, hashlib.sha256(authorization.encode()).digest())
+    now = time.monotonic()
+    with _owner_checks_lock:
+        if _owner_checks.get(key, 0) > now:
+            return True
+    if not owner_authorized(authorization, owner_uid, deadline):
+        return False
+    with _owner_checks_lock:
+        now = time.monotonic()
+        for expired in [key for key, expiry in _owner_checks.items() if expiry <= now]:
+            del _owner_checks[expired]
+        if len(_owner_checks) >= 128:
+            del _owner_checks[next(iter(_owner_checks))]
+        _owner_checks[key] = now + OWNER_CACHE_SECONDS
+    return True
 
 
 def from_environment():

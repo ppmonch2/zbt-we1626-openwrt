@@ -125,7 +125,7 @@ class AliceProtocolTest(unittest.TestCase):
         first, second = FakeServices(), FakeServices()
         self.run_request(event(), first);self.run_request(event(), second)
         self.assertEqual(first.jobs[0]['id'], second.jobs[0]['id'])
-        self.assertLess(first.jobs[0]['expires_at'] - time.time(), 2.6)
+        self.assertLess(first.jobs[0]['expires_at'] - time.time(), skill.RESPONSE_BUDGET)
         self.assertGreater(first.jobs[0]['expires_at'], time.time())
 
     def test_no_acknowledgement_is_an_error_without_exceeding_deadline(self):
@@ -208,7 +208,8 @@ class CloudHttpsTest(unittest.TestCase):
                 client.submit({'id':'a'*64}, time.monotonic()+2)
             connection.request.assert_called_once()
             connection.close.assert_called_once()
-            self.assertEqual(client.opener.connections, {})
+            self.assertNotIn('message-queue.api.cloud.yandex.net', client.opener.connections)
+            client.close()
 
     def test_handler_accepts_raw_json_text_and_bytes_and_rejects_bad_or_large_input(self):
         diagnostic = {'heatbridge_diagnostic': 'expired_queue_probe'}
