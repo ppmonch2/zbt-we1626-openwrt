@@ -80,12 +80,21 @@ print(json.dumps({'ok':True,'encrypted_session':True,'command_acknowledged':sys.
   (self.root/'fail').touch();data=self.request({'action':'set','id':'h1','value':22})
   self.assertIn('may_have_been_applied',data['error']);self.assertEqual(json.loads(self.cfg.read_text())['heaters']['h1']['temp'],18)
  def test_invalid_ids_and_temperatures_do_not_reach_client(self):
-  for payload in [{'action':'set','id':'h5','value':22},{'action':'set','id':'h1','value':31},{'action':'mode','id':'h1','value':99},{'action':'configure','id':'h1','name':'x','device_id':'aabbccddeeff','token':'bad'}]:
+  for payload in [{'action':'set','id':'h5','value':22},{'action':'set','id':'h1','value':36},{'action':'mode','id':'h1','value':99},{'action':'configure','id':'h1','name':'x','device_id':'aabbccddeeff','token':'bad'}]:
    self.assertFalse(self.request(payload)['ok'])
   self.assertFalse((self.root/'calls').exists())
  def test_confirmed_setpoint_is_persisted(self):
   data=self.request({'action':'set','id':'h1','value':22})
   self.assertTrue(data['ok']);self.assertEqual(json.loads(self.cfg.read_text())['heaters']['h1']['temp'],22)
+ def test_local_api_accepts_10_to_35_inclusive(self):
+  for value in (10, 30, 31, 35):
+   data=self.request({'action':'set','id':'h1','value':value})
+   self.assertTrue(data['ok'])
+   self.assertEqual(json.loads(self.cfg.read_text())['heaters']['h1']['temp'],value)
+  for value in (9,36):
+   self.assertEqual(self.request({'action':'set','id':'h1','value':value})['error'],
+                    'invalid_temperature')
+
 class MdnsParserTest(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
