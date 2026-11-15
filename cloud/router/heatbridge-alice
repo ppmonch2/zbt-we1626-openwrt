@@ -46,8 +46,30 @@ sqs() {
   --data-urlencode "QueueUrl=$queue" "$@" \
   https://message-queue.api.cloud.yandex.net/
 }
+process_message() {
+ case "$encoded" in ''|*[!A-Za-z0-9+/=]*) return 1;; esac
+ [ "${#encoded}" -le 2800 ] || return 1
+ printf '%s' "$encoded" | base64 -d > "$runtime/job.json" 2>/dev/null || return 1
+ "$base/bin/heatbridge-alice-worker" < "$runtime/job.json" > "$runtime/ack.json" || return 1
+ id="$(jq -r '.id // empty' "$runtime/ack.json")" || return 1
+ case "$id" in ''|*[!a-f0-9]*) return 1;; esac
+ [ "${#id}" = 64 ] || return 1
+ if ! http --max-time 5 --aws-sigv4 'aws:amz:ru-central1:s3' -X PUT \
+   -H 'Content-Type: application/json' --data-binary "@$runtime/ack.json" \
+   -w '%{time_total}' \
+   "https://storage.yandexcloud.net/$bucket/acks/$id.json" > "$runtime/upload_seconds"; then
+  printf '%s\n' 'ack_upload_failed_command_may_have_been_applied' > "$runtime/status"
+  return 1
+ fi
+ jq -n --argjson received "$received_at" --slurpfile ack "$runtime/ack.json" \
+   --slurpfile job "$runtime/job.json" --rawfile upload "$runtime/upload_seconds" \
+   '{id:$job[0].id,received_at:$received,ack_created_at:$ack[0].observed_at,
+     upload_finished_at:now,upload_seconds:($upload|tonumber? // null),
+     expires_at:$job[0].expires_at,ok:$ack[0].ok}' > "$runtime/delivery.json"
+}
 while :; do
  if ! sqs ReceiveMessage --data-urlencode 'MaxNumberOfMessages=1' \
+      --data-urlencode 'VisibilityTimeout=10' \
       --data-urlencode 'WaitTimeSeconds=20' > "$runtime/reply.xml"; then
   printf '%s\n' 'queue_connection_failed' > "$runtime/status"
   sleep 5
@@ -60,22 +82,17 @@ while :; do
  [ -n "$receipt" ] || continue
  case "$receipt" in *[!A-Za-z0-9+/=_-]*) sleep 1; continue;; esac
  encoded="$(sed -n 's:.*<Body>\([^<]*\)</Body>.*:\1:p' "$runtime/flat.xml")"
- # Acknowledge queue ownership before invoking hardware. If deletion fails, do not act.
- if ! sqs DeleteMessage --data-urlencode "ReceiptHandle=$receipt" > "$runtime/delete.xml"; then continue; fi
- grep -q '<DeleteMessageResponse' "$runtime/delete.xml" || continue
- case "$encoded" in ''|*[!A-Za-z0-9+/=]*) continue;; esac
- [ "${#encoded}" -le 2800 ] || continue
- if ! printf '%s' "$encoded" | base64 -d > "$runtime/job.json" 2>/dev/null; then continue; fi
- if ! "$base/bin/heatbridge-alice-worker" < "$runtime/job.json" > "$runtime/ack.json"; then continue; fi
- id="$(jq -r '.id // empty' "$runtime/ack.json")"
- case "$id" in ''|*[!a-f0-9]*) continue;; esac
- [ "${#id}" = 64 ] || continue
- if ! http --max-time 5 --aws-sigv4 'aws:amz:ru-central1:s3' -X PUT \
-   -H 'Content-Type: application/json' --data-binary "@$runtime/ack.json" \
-   "https://storage.yandexcloud.net/$bucket/acks/$id.json" > /dev/null; then
-  printf '%s\n' 'ack_upload_failed_command_may_have_been_applied' > "$runtime/status"
+ received_at="$(jq -nr now)"
+ # The worker persists an atomic claim BEFORE hardware I/O. Redelivery cannot
+ # repeat the action, including after a failed deletion or process crash.
+ # Publish the real heater ACK before spending a network round trip on deletion.
+ process_message || true
+ if ! sqs DeleteMessage --data-urlencode "ReceiptHandle=$receipt" > "$runtime/delete.xml"; then
+  printf '%s\n' 'queue_delete_failed_job_will_not_be_reexecuted' > "$runtime/status"
  fi
  # Stale jobs expire in seconds. Keep at-most-once claims for two full days.
- find "$base/var/lib/heatbridge-alice/requests" -type f -mtime +2 -exec rm -f '{}' \;
- find "$base/var/lib/heatbridge-alice/requests" -mindepth 1 -maxdepth 1 -type d -exec rmdir '{}' \; 2>/dev/null || true
+ if [ -d "$base/var/lib/heatbridge-alice/requests" ]; then
+  find "$base/var/lib/heatbridge-alice/requests" -type f -mtime +2 -exec rm -f '{}' \; || true
+  find "$base/var/lib/heatbridge-alice/requests" -mindepth 1 -maxdepth 1 -type d -exec rmdir '{}' \; 2>/dev/null || true
+ fi
 done

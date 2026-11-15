@@ -405,7 +405,7 @@ printf '{"encrypted_session":true,"command_acknowledged":true,"state_echo_matche
         self.assertFalse(json.loads(result.stdout)['ok'])
         self.assertFalse((self.base/'calls').exists())
 
-    def agent(self, delete_ok=True, config_changes=None):
+    def agent(self, delete_ok=True, config_changes=None, deliveries=1, encoded_override=None):
         config = {'queue_url': 'https://message-queue.api.cloud.yandex.net/folder/id/jobs',
                   'ack_bucket': 'private-bucket', 'access_key': 'fixture-access-key',
                   'secret_key': 'fixture-secret-key'}
@@ -415,6 +415,8 @@ printf '{"encrypted_session":true,"command_acknowledged":true,"state_echo_matche
         wrapper.write_text('#!/bin/sh\nexec sh "'+str(ROOT/'cloud/router/heatbridge-alice-worker')+'"\n')
         wrapper.chmod(0o755)
         encoded = base64.b64encode(json.dumps(self.job()).encode()).decode()
+        if encoded_override is not None:
+            encoded = encoded_override
         (self.base/'reply.xml').write_text('<ReceiveMessageResponse><ReceiveMessageResult><Message>'
           '<ReceiptHandle>EAEgrOGOhogtKAA</ReceiptHandle><Body>'+encoded+'</Body>'
           '</Message></ReceiveMessageResult></ReceiveMessageResponse>')
@@ -423,35 +425,61 @@ curl() {
  case "$*" in
   *'--help all'*) printf '%s\\n' '--aws-sigv4';;
   *Action=ReceiveMessage*)
-    [ ! -f "$HEATBRIDGE_PREFIX/polled" ] || exit 0
-    touch "$HEATBRIDGE_PREFIX/polled"
+    case "$*" in *VisibilityTimeout=10*) ;; *) exit 8;; esac
+    count=0
+    [ ! -f "$HEATBRIDGE_PREFIX/polled" ] || count="$(cat "$HEATBRIDGE_PREFIX/polled")"
+    [ "$count" -lt DELIVERIES ] || exit 0
+    printf '%s' "$((count+1))" > "$HEATBRIDGE_PREFIX/polled"
     cat "$HEATBRIDGE_PREFIX/reply.xml";;
-  *Action=DeleteMessage*) DELETE_RESULT;;
+  *Action=DeleteMessage*) printf 'delete\\n' >> "$HEATBRIDGE_PREFIX/order"; DELETE_RESULT;;
   *aws:amz:ru-central1:s3*)
+    printf 'upload\\n' >> "$HEATBRIDGE_PREFIX/order"
+    printf '0.1'
     cp "$HEATBRIDGE_ALICE_RUNTIME/ack.json" "$HEATBRIDGE_PREFIX/uploaded.json";;
   *) exit 9;;
  esac
 }
 . "AGENT_PATH"
 '''.replace('DELETE_RESULT', "printf '<DeleteMessageResponse/>'" if delete_ok else 'return 28')
+        mock = mock.replace('DELIVERIES', str(deliveries))
         mock = mock.replace('AGENT_PATH', str(ROOT/'cloud/router/heatbridge-alice'))
         return subprocess.run(['sh', '-c', mock], capture_output=True, text=True, timeout=3,
           env={**os.environ, 'HEATBRIDGE_PREFIX': str(self.base),
                'HEATBRIDGE_ALICE_RUNTIME': str(self.base/'runtime')})
 
-    def test_agent_receives_deletes_executes_and_uploads_correlated_ack(self):
+    def test_agent_uploads_confirmed_result_before_queue_deletion(self):
         result = self.agent()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(json.loads((self.base/'uploaded.json').read_text())['ok'])
         self.assertEqual((self.base/'calls').read_text().splitlines(), ['set h2 22'])
         self.assertNotIn('fixture-secret-key', result.stdout+result.stderr)
         self.assertEqual((self.base/'runtime/curl.conf').stat().st_mode & 0o777, 0o600)
+        self.assertEqual((self.base/'order').read_text().splitlines(), ['upload', 'delete'])
+        timing = json.loads((self.base/'runtime/delivery.json').read_text())
+        self.assertTrue(timing['ok'])
+        self.assertEqual(timing['upload_seconds'], .1)
 
-    def test_agent_never_controls_heater_when_queue_delete_failed(self):
-        result = self.agent(delete_ok=False)
+    def test_failed_queue_delete_and_redelivery_do_not_repeat_hardware_action(self):
+        result = self.agent(delete_ok=False, deliveries=2)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.base/'calls').read_text().splitlines(), ['set h2 22'])
+        self.assertTrue(json.loads((self.base/'uploaded.json').read_text())['ok'])
+        self.assertEqual((self.base/'order').read_text().splitlines(), ['upload', 'delete', 'upload', 'delete'])
+
+    def test_agent_discards_malformed_message_and_continues_polling(self):
+        result = self.agent(encoded_override='invalid!')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.base/'calls').exists())
         self.assertFalse((self.base/'uploaded.json').exists())
+        self.assertEqual((self.base/'order').read_text().splitlines(), ['delete'])
+
+    def test_agent_discards_expired_job_without_hardware_action(self):
+        encoded = base64.b64encode(json.dumps(self.job(expires_at=0)).encode()).decode()
+        result = self.agent(encoded_override=encoded)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.base/'calls').exists())
+        self.assertFalse((self.base/'uploaded.json').exists())
+        self.assertEqual((self.base/'order').read_text().splitlines(), ['delete'])
 
     def test_agent_and_worker_work_with_unusable_jq_regex_engine(self):
         with patch.dict(os.environ, {'LD_PRELOAD': str(self.no_regex)}):
