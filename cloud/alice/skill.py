@@ -36,12 +36,12 @@ def command(capability, relative_target=None):
         if relative is True:
             if relative_target is None:
                 raise ValueError('INVALID_ACTION')
-            if type(value) not in (int, float) or not -30 <= value <= 30 or int(value) != value:
+            if type(value) not in (int, float) or not -25 <= value <= 25 or int(value) != value:
                 raise ValueError('INVALID_VALUE')
             value += relative_target
         elif relative is not False:
             raise ValueError('INVALID_ACTION')
-        if type(value) not in (int, float) or not 5 <= value <= 30 or int(value) != value:
+        if type(value) not in (int, float) or not 10 <= value <= 35 or int(value) != value:
             raise ValueError('INVALID_VALUE')
         return 'set', int(value)
     raise ValueError('INVALID_ACTION')
@@ -68,7 +68,7 @@ def catalog(names, state_available=False):
                  {'type': POWER, 'retrievable': state_available, 'reportable': False},
                  {'type': RANGE, 'retrievable': state_available, 'reportable': False,
                   'parameters': {'instance': 'temperature', 'unit': 'unit.temperature.celsius',
-                                 'random_access': True, 'range': {'min': 5, 'max': 30, 'precision': 1}}}],
+                                 'random_access': True, 'range': {'min': 10, 'max': 35, 'precision': 1}}}],
              **({'properties': [{'type': FLOAT, 'retrievable': True, 'reportable': False,
                   'parameters': {'instance': 'temperature', 'unit': 'unit.temperature.celsius'}}]}
                 if state_available else {})}
