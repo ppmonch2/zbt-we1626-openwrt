@@ -299,6 +299,21 @@ print(json.dumps({'encrypted_session':True,'command_acknowledged':True,'state_ec
         self.assertNotEqual(self.batch(jobs).returncode, 0)
         self.assertFalse((self.base/'device-calls').exists())
 
+    def test_webdav_batches_enforce_actual_10_to_35_range(self):
+        for value in (10, 31, 35):
+            job = self.jobs()[0]
+            job['value'] = value
+            result = self.batch([job])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(json.loads(result.stdout)['acks'][job['id']]['ok'])
+        for value in (9, 36):
+            job = self.jobs()[0]
+            job['id'] = str(value % 10) * 64
+            job['value'] = value
+            result = self.batch([job])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(json.loads(result.stdout)['acks'])
+
     def test_same_heater_power_and_temperature_stay_ordered(self):
         jobs = [self.jobs()[0], {**self.jobs()[0], 'id': 'f'*64, 'action': 'mode', 'value': 1}]
         result = self.batch(jobs)
