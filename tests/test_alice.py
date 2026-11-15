@@ -139,6 +139,33 @@ class AliceProtocolTest(unittest.TestCase):
 
 
 class CloudHttpsTest(unittest.TestCase):
+    def test_read_ack_probe_checks_existing_confirmation_without_sending_commands(self):
+        job = {'id': 'a'*64, 'heater': 'h2', 'action': 'set', 'value': 24}
+        client = MagicMock()
+        client.bucket = 'private-bucket'
+        for data, expected in ((ack(job), True), ({**ack(job), 'ok': False}, False), (None, None)):
+            client.acknowledgement.return_value = data
+            with patch('diagnostics.from_environment', return_value=client):
+                result = skill.handler({'heatbridge_diagnostic': 'read_ack', 'job_id': job['id']}, None)
+            self.assertEqual(result['status'], 'OK')
+            self.assertEqual(result.get('valid_confirmation'), expected)
+            self.assertEqual(result['object_found'], data is not None)
+            client.submit.assert_not_called()
+        with patch('diagnostics.from_environment') as factory:
+            result = skill.handler({'heatbridge_diagnostic': 'read_ack', 'job_id': '../invalid'}, None)
+            self.assertEqual(result['error'], 'invalid_job_id')
+            factory.assert_not_called()
+
+    def test_missing_bucket_is_an_error_instead_of_pending_ack(self):
+        def opener(request, timeout):
+            raise urllib.error.HTTPError(request.full_url, 404, 'not found', {},
+                io.BytesIO(b'<Error><Code>NoSuchBucket</Code></Error>'))
+        client = Services('https://message-queue.api.cloud.yandex.net/folder/id/jobs',
+                          'missing-bucket', 'fixture-key', 'fixture-secret', opener)
+        with self.assertRaises(ServiceError) as caught:
+            client.acknowledgement('a'*64, time.monotonic()+2)
+        self.assertEqual(caught.exception.cloud_code, 'NoSuchBucket')
+
     def test_ack_poll_reuses_tls_connection_after_404_and_consumes_response(self):
         absent = io.BytesIO(b'<Error><Code>NoSuchKey</Code></Error>')
         absent.status, absent.headers = 404, {}

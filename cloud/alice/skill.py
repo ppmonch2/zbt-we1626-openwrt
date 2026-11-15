@@ -180,6 +180,10 @@ def handler(event, context):
     if event == {'heatbridge_diagnostic': 'expired_queue_probe'}:
         from diagnostics import probe
         return probe()
+    if (isinstance(event, dict) and set(event) == {'heatbridge_diagnostic', 'job_id'}
+            and event.get('heatbridge_diagnostic') == 'read_ack'):
+        from diagnostics import read_ack_probe
+        return read_ack_probe(event['job_id'])
     try:
         owner = owner_identifier(os.environ)
         names = json.loads(os.environ['HEATBRIDGE_DEVICES_JSON'])

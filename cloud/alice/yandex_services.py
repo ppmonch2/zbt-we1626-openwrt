@@ -32,7 +32,7 @@ def error_details(error):
         details['http_status'] = error.http_status
     allowed = {'AccessDenied', 'AccessDeniedException', 'SignatureDoesNotMatch',
                'InvalidClientTokenId', 'InvalidAccessKeyId', 'RequestTimeTooSkewed',
-               'ExpiredToken', 'NonExistentQueue', 'AWS.SimpleQueueService.NonExistentQueue'}
+               'ExpiredToken', 'NoSuchBucket', 'NonExistentQueue', 'AWS.SimpleQueueService.NonExistentQueue'}
     if error.cloud_code in allowed:
         details['cloud_code'] = error.cloud_code
     reason = error.args[0] if error.args else None
@@ -137,13 +137,13 @@ class Services:
                     raise ServiceError('oversized_response')
                 return data
         except urllib.error.HTTPError as exc:
-            if exc.code == 404 and service == 's3' and method == 'GET':
-                return None
             code = None
             try:
                 code = ET.fromstring(exc.read(4096)).findtext('.//{*}Code')
             except (ET.ParseError, OSError, TypeError, AttributeError):
                 pass
+            if exc.code == 404 and service == 's3' and method == 'GET' and code != 'NoSuchBucket':
+                return None
             raise ServiceError('cloud_http_error', service=service,
                                http_status=exc.code, cloud_code=code) from None
         except (OSError, ValueError, http.client.HTTPException) as exc:
