@@ -302,10 +302,12 @@ print(json.dumps({'encrypted_session':True,'command_acknowledged':True,'state_ec
     def test_webdav_batches_enforce_actual_10_to_35_range(self):
         for value in (10, 31, 35):
             job = self.jobs()[0]
+            job['id'] = f'{value:064x}'
             job['value'] = value
             result = self.batch([job])
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(json.loads(result.stdout)['acks'][job['id']]['ok'])
+            self.assertEqual(json.loads(result.stdout)['acks'][job['id']]['value'], value)
         for value in (9, 36):
             job = self.jobs()[0]
             job['id'] = str(value % 10) * 64
