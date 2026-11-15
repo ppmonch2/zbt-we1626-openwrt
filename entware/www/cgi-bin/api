@@ -69,7 +69,7 @@ if [ "$method" = POST ]; then
    value="$(printf '%s' "$payload" | jq -r '.value // empty')"
    case "$value" in ''|*[!0-9]*) error invalid_value;; esac
    if [ "$action" = set ]; then
-    [ "$value" -ge 5 ] && [ "$value" -le 30 ] || error invalid_temperature
+    [ "$value" -ge 10 ] && [ "$value" -le 35 ] || error invalid_temperature
    else
     case "$value" in 0|1|2|3) ;; *) error invalid_mode;; esac
    fi
@@ -101,7 +101,7 @@ observed="$(jq -cs '
       and .online==true and .result.encrypted_session==true and recent(.observed_at)) |
    {key:.heater, value:{
      observed_at:.observed_at,
-     reported_target:sensor("reported_target";5;35),
+     reported_target:sensor("reported_target";10;35),
      current_temperature:sensor("current_temperature";-60;100),
      device_mode:sensor("device_mode";0;3)
    }} ] | from_entries
