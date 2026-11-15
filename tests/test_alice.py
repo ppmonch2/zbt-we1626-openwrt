@@ -106,7 +106,7 @@ class AliceProtocolTest(unittest.TestCase):
             self.assertEqual(self.result(response)['status'], 'ERROR')
 
     def test_invalid_values_and_unknown_heaters_are_never_queued(self):
-        for value in (True, 4, 31, 22.5, '22', None):
+        for value in (True, 9, 36, 22.5, '22', None):
             client = FakeServices()
             self.assertEqual(self.result(self.run_request(event(value), client))['error_code'], 'INVALID_VALUE')
             self.assertFalse(client.jobs)
@@ -114,6 +114,16 @@ class AliceProtocolTest(unittest.TestCase):
         response = self.run_request(event(heater='h4'), client)
         self.assertEqual(response['payload']['devices'][0]['action_result']['error_code'], 'DEVICE_NOT_FOUND')
         self.assertFalse(client.jobs)
+
+    def test_thermostat_accepts_full_hardware_range_and_advertises_it(self):
+        descriptor = skill.catalog({'h2': 'Мансарда'})[0]
+        self.assertEqual(descriptor['capabilities'][1]['parameters']['range'],
+                         {'min': 10, 'max': 35, 'precision': 1})
+        for value in (10, 30, 31, 35):
+            client = FakeServices()
+            response = self.run_request(event(value), client)
+            self.assertEqual(self.result(response)['status'], 'DONE')
+            self.assertEqual(client.jobs[0]['value'], value)
 
     def test_relative_temperature_cannot_use_an_unverified_cached_setpoint(self):
         request = event();request['payload']['devices'][0]['capabilities'][0]['state']['relative'] = True
