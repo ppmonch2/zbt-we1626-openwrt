@@ -128,6 +128,38 @@ class AliceStateTest(unittest.TestCase):
         self.assertEqual(response['payload']['devices'][0]['capabilities'][0]['state']['action_result']['error_code'],
                          'DEVICE_UNREACHABLE')
 
+    def test_alice_plus_minus_buttons_use_fresh_setpoint_even_without_room_sensor(self):
+        # Yandex sends relative:true +1/-1 for thermostat controls.
+        for delta, expected in ((1, 22), (-1, 20)):
+            with self.subTest(delta=delta):
+                state = snapshot(target=21, measured=18.5)
+                state['result']['current_temperature'] = None
+                state['field_observed_at']['current_temperature'] = time.time() - 200
+                client = StateServices({'schema': 1, 'devices': {'h2': state}})
+                request = event(delta)
+                request['payload']['devices'][0]['capabilities'][0]['state']['relative'] = True
+                response = skill.process(request, {'h2': 'Мансарда'}, '123', client,
+                                         authorize=lambda *args: True)
+                self.assertEqual([job['value'] for job in client.jobs], [expected])
+                self.assertEqual(response['payload']['devices'][0]['capabilities'][0]
+                                 ['state']['action_result']['status'], 'DONE')
+
+    def test_alice_relative_buttons_refuse_stale_or_boundary_setpoints(self):
+        for target, stamp, delta in ((30, time.time(), 1), (5, time.time(), -1),
+                                      (22, time.time()-120, 1)):
+            with self.subTest(target=target, delta=delta):
+                state = snapshot(target=target)
+                state['observed_at'] = stamp
+                state['field_observed_at']['reported_target'] = stamp
+                client = StateServices({'schema': 1, 'devices': {'h2': state}})
+                request = event(delta)
+                request['payload']['devices'][0]['capabilities'][0]['state']['relative'] = True
+                response = skill.process(request, {'h2': 'Мансарда'}, '123', client,
+                                         authorize=lambda *args: True)
+                self.assertFalse(client.jobs)
+                self.assertEqual(response['payload']['devices'][0]['capabilities'][0]
+                                 ['state']['action_result']['status'], 'ERROR')
+
     def test_state_reads_are_authorized_and_only_signed_gets_are_needed(self):
         client = StateServices({'schema': 1, 'devices': {'h2': snapshot()}})
         request = event(); request['request_type'] = 'query'
