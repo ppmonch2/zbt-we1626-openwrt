@@ -47,6 +47,19 @@ class FakeServices:
 
 
 class AliceProtocolTest(unittest.TestCase):
+    def test_state_refresh_after_successful_action_does_not_report_device_error(self):
+        client = FakeServices()
+        response = self.run_request(event(), client)
+        self.assertEqual(self.result(response)['status'], 'DONE')
+        request = event()
+        request['request_type'] = 'query'
+        request['payload']['devices'] = [{'id': 'h2'}, {'id': 'h4'}]
+        response = self.run_request(request, client)
+        self.assertEqual(response['payload']['devices'], [
+            {'id': 'h2', 'capabilities': []}, {'id': 'h4', 'error_code': 'DEVICE_NOT_FOUND'}])
+        self.assertEqual(len(client.jobs), 1)
+        self.assertNotIn('current_temperature', json.dumps(response))
+
     def run_request(self, request, services=None, authorized=True):
         return skill.process(request, {'h2': 'Мансарда'}, '123', services or FakeServices(),
                              authorize=lambda *args: authorized)

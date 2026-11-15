@@ -100,8 +100,11 @@ def process(event, names, owner_uid, services, authorize=owner_authorized):
                 'DEVICE_NOT_FOUND' if kind == 'query' else failure('DEVICE_NOT_FOUND'))
             continue
         if kind == 'query':
-            # Control-only first release: never present desired settings as measured state.
-            entry['error_code'] = 'NOT_SUPPORTED_IN_CURRENT_MODE'
+            # All advertised capabilities are retrievable:false. Yandex allows
+            # omitting them; returning a device error falsely marks a refresh as failed.
+            # Do not invent measured state or infer current connectivity from a past ACK.
+            entry['capabilities'] = []
+            trace('query_without_retrievable_state')
             continue
         capabilities = device.get('capabilities')
         if (not isinstance(capabilities, list) or not 1 <= len(capabilities) <= 2 or
