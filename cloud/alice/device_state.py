@@ -40,7 +40,7 @@ def observed_state(bundle, heater, now=None):
             return None
     target, measured, mode = (result.get(name) for name in
                               ('reported_target', 'current_temperature', 'device_mode'))
-    if (not number(target, 5, 35) or not number(measured, -60, 100) or
+    if (not number(target, 10, 35) or not number(measured, -60, 100) or
             type(mode) is not int or mode not in (0, 1, 2, 3)):
         return None
     return {'capabilities': [
@@ -74,4 +74,4 @@ def observed_setpoint(bundle, heater, now=None):
                 stamps.get('reported_target'), now - STATE_MAX_AGE, now + FUTURE_TOLERANCE):
             return None
     target = result.get('reported_target')
-    return target if number(target, 5, 30) and target == int(target) else None
+    return target if number(target, 10, 35) and target == int(target) else None
