@@ -1,6 +1,14 @@
 name: Ballu direct Alice bridge checks
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - cloud/**
+      - tests/test_alice*.py
+      - tests/test_entware.py
+      - entware/bin/heatbridge-device
+      - entware/www/**
+      - .github/workflows/alice-check.yml
   push:
     branches: [main]
     paths:
@@ -23,8 +31,10 @@ jobs:
           for script in cloud/router/*; do sh -n "$script"; done
           sh -n entware/www/cgi-bin/disk-api
           node --check entware/www/disk.js
+          node --check entware/www/app.js
           node tests/test_disk_ui.cjs
           python3 -m unittest discover -s tests -p 'test_alice*.py' -v
+          python3 -m unittest discover -s tests -p 'test_entware.py' -v
           python3 cloud/package.py
       - uses: actions/upload-artifact@v4
         with:
