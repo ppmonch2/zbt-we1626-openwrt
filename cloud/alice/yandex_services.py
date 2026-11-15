@@ -3,6 +3,8 @@ import base64
 import datetime
 import hashlib
 import hmac
+import http.client
+import io
 import json
 import os
 import re
@@ -64,14 +66,61 @@ def signed_headers(method, url, body, service, access, secret, instant=None):
     return fields
 
 
+class KeepAliveHTTPS:
+    """Reuse TLS connections while polling, including after a pending S3 404."""
+    def __init__(self):
+        self.connections = {}
+
+    def close(self):
+        for connection in self.connections.values():
+            connection.close()
+        self.connections.clear()
+
+    def __call__(self, request, timeout):
+        parsed = urllib.parse.urlsplit(request.full_url)
+        if parsed.scheme != 'https' or parsed.hostname not in (
+                'storage.yandexcloud.net', 'message-queue.api.cloud.yandex.net'):
+            raise ValueError('Unsupported cloud endpoint')
+        host = parsed.netloc
+        connection = self.connections.get(host)
+        if connection is None:
+            connection = http.client.HTTPSConnection(host, timeout=timeout)
+            self.connections[host] = connection
+        connection.timeout = timeout
+        if connection.sock is not None:
+            connection.sock.settimeout(timeout)
+        try:
+            connection.request(request.get_method(), parsed.path or '/',
+                               body=request.data, headers=dict(request.header_items()))
+            response = connection.getresponse()
+            data = response.read(65537)
+            response.close()
+            if len(data) > 65536:
+                raise ServiceError('oversized_response')
+        except (OSError, http.client.HTTPException, ServiceError):
+            connection.close()
+            self.connections.pop(host, None)
+            # Do not retry POST: the queue might already have accepted the job.
+            raise
+        if not 200 <= response.status < 300:
+            raise urllib.error.HTTPError(request.full_url, response.status, 'cloud response',
+                                         response.headers, io.BytesIO(data))
+        return io.BytesIO(data)
+
+
 class Services:
-    def __init__(self, queue, bucket, access, secret, opener=urllib.request.urlopen):
+    def __init__(self, queue, bucket, access, secret, opener=None):
         if not re.fullmatch(r'https://message-queue\.api\.cloud\.yandex\.net/[A-Za-z0-9_./-]+', queue):
             raise ValueError('Invalid queue URL')
         if not re.fullmatch(r'[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]', bucket):
             raise ValueError('Invalid bucket')
         self.queue, self.bucket = queue, bucket
-        self.access, self.secret, self.opener = access, secret, opener
+        self.access, self.secret = access, secret
+        self.opener = opener if opener is not None else KeepAliveHTTPS()
+
+    def close(self):
+        if isinstance(self.opener, KeepAliveHTTPS):
+            self.opener.close()
 
     def request(self, method, url, body, service, deadline, content_type=None):
         remaining = deadline - time.monotonic()
@@ -97,7 +146,7 @@ class Services:
                 pass
             raise ServiceError('cloud_http_error', service=service,
                                http_status=exc.code, cloud_code=code) from None
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, http.client.HTTPException) as exc:
             raise ServiceError('cloud_connection_error', service=service) from None
 
     def submit(self, job, deadline):

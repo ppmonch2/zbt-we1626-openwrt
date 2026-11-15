@@ -10,6 +10,7 @@ from yandex_services import ServiceError, error_details, from_environment, owner
 RANGE = 'devices.capabilities.range'
 POWER = 'devices.capabilities.on_off'
 IDS = {'h1', 'h2', 'h3', 'h4'}
+RESPONSE_BUDGET = 2.65
 
 
 def failure(code, message=None):
@@ -61,7 +62,7 @@ def catalog(names):
 
 
 def process(event, names, owner_uid, services, authorize=owner_authorized):
-    deadline = time.monotonic() + 2.35  # Leave room for the platform's network overhead.
+    deadline = time.monotonic() + RESPONSE_BUDGET
     if not isinstance(event, dict) or len(json.dumps(event)) > 16000:
         return {'payload': {'error_code': 'INVALID_ACTION'}}
     headers = event.get('headers')
@@ -72,7 +73,7 @@ def process(event, names, owner_uid, services, authorize=owner_authorized):
     response = {'request_id': request_id}
     def trace(stage, **details):
         print(json.dumps({'request_id': request_id, 'stage': stage,
-                          'elapsed_ms': round((time.monotonic() - deadline + 2.35) * 1000),
+                          'elapsed_ms': round((time.monotonic() - deadline + RESPONSE_BUDGET) * 1000),
                           **details}))
     if not authorize(headers.get('authorization'), owner_uid, deadline):
         trace('authorization_failed')
@@ -147,7 +148,7 @@ def process(event, names, owner_uid, services, authorize=owner_authorized):
                     trace('heater_confirmation_rejected', job_id=job['id'])
                 pending.remove((job, result))
         if pending:
-            time.sleep(min(.08, max(0, deadline - time.monotonic())))
+            time.sleep(min(.03, max(0, deadline - time.monotonic())))
     if pending:
         trace('confirmation_deadline')
     return {**response, 'payload': {'devices': output}}
@@ -190,7 +191,13 @@ def handler(event, context):
             identity = event['headers'].get('request_id', '')
             if isinstance(identity, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,128}', identity):
                 print(json.dumps({'request_id': identity}))
-        return process(event, names, owner, from_environment())
+        services = from_environment()
+        try:
+            return process(event, names, owner, services)
+        finally:
+            close = getattr(services, 'close', None)
+            if close:
+                close()
     except (KeyError, ValueError, TypeError, ServiceError):
         # Do not echo tokens, credentials, cloud response bodies or environment variables.
         return {'payload': {'error_code': 'INTERNAL_ERROR'}}

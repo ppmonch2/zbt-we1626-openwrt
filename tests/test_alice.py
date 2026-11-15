@@ -9,7 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import urllib.error
 import urllib.parse
 
@@ -112,7 +112,7 @@ class AliceProtocolTest(unittest.TestCase):
         first, second = FakeServices(), FakeServices()
         self.run_request(event(), first);self.run_request(event(), second)
         self.assertEqual(first.jobs[0]['id'], second.jobs[0]['id'])
-        self.assertLess(first.jobs[0]['expires_at'] - time.time(), 2.4)
+        self.assertLess(first.jobs[0]['expires_at'] - time.time(), 2.6)
         self.assertGreater(first.jobs[0]['expires_at'], time.time())
 
     def test_no_acknowledgement_is_an_error_without_exceeding_deadline(self):
@@ -124,8 +124,52 @@ class AliceProtocolTest(unittest.TestCase):
         with patch('skill.time.monotonic', side_effect=lambda: ticks[0]), patch('skill.time.sleep'):
             self.assertEqual(self.result(self.run_request(event(), Missing()))['status'], 'ERROR')
 
+    def test_confirmation_after_2350ms_is_accepted_within_alice_budget(self):
+        ticks = [100.0]
+        class Delayed(FakeServices):
+            def acknowledgement(self, identity, deadline):
+                if ticks[0] == 100.0:
+                    ticks[0] = 102.45
+                    return None
+                ticks[0] = 102.5
+                return super().acknowledgement(identity, deadline)
+        with patch('skill.time.monotonic', side_effect=lambda: ticks[0]), patch('skill.time.sleep'):
+            self.assertEqual(self.result(self.run_request(event(), Delayed()))['status'], 'DONE')
+        self.assertLess(skill.RESPONSE_BUDGET, 3)
+
 
 class CloudHttpsTest(unittest.TestCase):
+    def test_ack_poll_reuses_tls_connection_after_404_and_consumes_response(self):
+        absent = io.BytesIO(b'<Error><Code>NoSuchKey</Code></Error>')
+        absent.status, absent.headers = 404, {}
+        present = io.BytesIO(b'{"ok":true}')
+        present.status, present.headers = 200, {}
+        connection = MagicMock()
+        connection.getresponse.side_effect = [absent, present]
+        with patch('yandex_services.http.client.HTTPSConnection', return_value=connection) as factory:
+            client = Services('https://message-queue.api.cloud.yandex.net/folder/id/jobs',
+                              'private-bucket', 'fixture-key', 'fixture-secret')
+            self.assertIsNone(client.acknowledgement('a'*64, time.monotonic()+2))
+            self.assertTrue(absent.closed)
+            self.assertEqual(client.acknowledgement('a'*64, time.monotonic()+2), {'ok': True})
+            factory.assert_called_once()
+            self.assertEqual(connection.request.call_count, 2)
+            self.assertTrue(present.closed)
+            client.close()
+            connection.close.assert_called_once()
+
+    def test_failed_send_is_not_retried_and_connection_is_discarded(self):
+        connection = MagicMock()
+        connection.getresponse.side_effect = OSError('fixture-secret')
+        with patch('yandex_services.http.client.HTTPSConnection', return_value=connection):
+            client = Services('https://message-queue.api.cloud.yandex.net/folder/id/jobs',
+                              'private-bucket', 'fixture-key', 'fixture-secret')
+            with self.assertRaises(ServiceError):
+                client.submit({'id':'a'*64}, time.monotonic()+2)
+            connection.request.assert_called_once()
+            connection.close.assert_called_once()
+            self.assertEqual(client.opener.connections, {})
+
     def test_handler_accepts_raw_json_text_and_bytes_and_rejects_bad_or_large_input(self):
         diagnostic = {'heatbridge_diagnostic': 'expired_queue_probe'}
         for raw in (json.dumps(diagnostic), json.dumps(diagnostic).encode(),

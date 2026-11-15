@@ -24,4 +24,8 @@ def probe():
         result['ack_read'] = {'status': 'OK', 'object_found': ack is not None}
     except ServiceError as exc:
         result['ack_read'] = {'status': 'ERROR', **error_details(exc)}
+    finally:
+        close = getattr(services, 'close', None)
+        if close:
+            close()
     return result
