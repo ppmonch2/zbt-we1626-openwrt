@@ -31,7 +31,7 @@ mkdir -p "$web/cgi-bin"
 if [ -f "$web/index.html" ] && [ ! -f /opt/etc/heatbridge/index.before-disk.html ]; then
  cp "$web/index.html" /opt/etc/heatbridge/index.before-disk.html
 fi
-for name in index.html disk.html disk.js cgi-bin/disk-api; do
+for name in index.html app.js disk.html disk.js cgi-bin/disk-api; do
  cp "$here/www/$name" "$web/$name.new"
  case "$name" in cgi-bin/*) chmod 755 "$web/$name.new";; *) chmod 644 "$web/$name.new";; esac
  mv "$web/$name.new" "$web/$name"
