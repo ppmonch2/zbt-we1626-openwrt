@@ -392,7 +392,7 @@ printf '{"encrypted_session":true,"command_acknowledged":true,"state_echo_matche
 
     def test_expired_jobs_invalid_ids_or_values_never_reach_hardware(self):
         for changes in ({'expires_at': time.time()-1}, {'expires_at': time.time()+60},
-                        {'id': '../../etc/passwd'}, {'heater': 'h5'}, {'value': 31},
+                        {'id': '../../etc/passwd'}, {'heater': 'h5'}, {'value': 36},
                         {'id': 'a'*63}, {'id': 'A'*64}, {'id': 'g'*64},
                         {'value': True}, {'action': 'reboot'}, {'action': 'mode', 'value': 3}):
             self.assertNotEqual(self.call(self.job(**changes)).returncode, 0)
