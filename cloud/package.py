@@ -27,7 +27,7 @@ def main():
             path = bundle/name
             path.write_bytes(data);path.chmod(0o755)
             hashes.append(hashlib.sha256(data).hexdigest()+'  '+name)
-        for name in ('index.html', 'app.js', 'disk.html', 'disk.js', 'cgi-bin/disk-api'):
+        for name in ('index.html', 'app.js', 'disk.html', 'disk.js', 'cgi-bin/api', 'cgi-bin/disk-api'):
             data = (ROOT.parent/'entware/www'/name).read_bytes()
             path = bundle/'www'/name
             path.parent.mkdir(parents=True, exist_ok=True)
