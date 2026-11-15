@@ -140,6 +140,23 @@ class DiskCloudTest(unittest.TestCase):
         self.assertEqual([d['capabilities'][0]['state']['action_result']['status']
                           for d in response['payload']['devices']], ['DONE', 'ERROR', 'DONE', 'DONE'])
 
+    def test_scene_setpoint_and_power_for_one_heater_are_batched_and_confirmed(self):
+        class SceneClient:
+            def submit_many(self, jobs, deadline): self.jobs = jobs
+            def acknowledgements(self, deadline):
+                return {job['id']: ack(job) for job in self.jobs}
+        request = event(value=19)
+        request['payload']['devices'][0]['capabilities'].append({
+            'type': skill.POWER, 'state': {'instance': 'on', 'value': True}})
+        client = SceneClient()
+        response = skill.process(request, {'h2': 'Мансарда'}, '123', client,
+                                 authorize=lambda *args: True)
+        self.assertEqual([(job['action'], job['value']) for job in client.jobs],
+                         [('set', 19), ('mode', 1)])
+        capabilities = response['payload']['devices'][0]['capabilities']
+        self.assertEqual([item['state']['action_result']['status'] for item in capabilities],
+                         ['DONE', 'DONE'])
+
     def test_status_diagnostic_reads_real_sensor_and_setpoint_without_commands(self):
         from test_alice_state import snapshot
         target = self.root/'heatbridge-v1/acks/state-v1.json'
