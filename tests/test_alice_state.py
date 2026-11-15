@@ -145,7 +145,7 @@ class AliceStateTest(unittest.TestCase):
                                  ['state']['action_result']['status'], 'DONE')
 
     def test_alice_relative_buttons_refuse_stale_or_boundary_setpoints(self):
-        for target, stamp, delta in ((30, time.time(), 1), (5, time.time(), -1),
+        for target, stamp, delta in ((35, time.time(), 1), (10, time.time(), -1),
                                       (22, time.time()-120, 1)):
             with self.subTest(target=target, delta=delta):
                 state = snapshot(target=target)
@@ -159,6 +159,18 @@ class AliceStateTest(unittest.TestCase):
                 self.assertFalse(client.jobs)
                 self.assertEqual(response['payload']['devices'][0]['capabilities'][0]
                                  ['state']['action_result']['status'], 'ERROR')
+
+    def test_relative_buttons_can_reach_35_from_34_and_10_from_11(self):
+        for old, delta, expected in ((34, 1, 35), (11, -1, 10)):
+            with self.subTest(old=old, delta=delta):
+                client = StateServices({'schema': 1, 'devices': {'h2': snapshot(target=old)}})
+                request = event(delta)
+                request['payload']['devices'][0]['capabilities'][0]['state']['relative'] = True
+                response = skill.process(request, {'h2': 'Мансарда'}, '123', client,
+                                         authorize=lambda *args: True)
+                self.assertEqual(client.jobs[0]['value'], expected)
+                self.assertEqual(response['payload']['devices'][0]['capabilities'][0]
+                                 ['state']['action_result']['status'], 'DONE')
 
     def test_state_reads_are_authorized_and_only_signed_gets_are_needed(self):
         client = StateServices({'schema': 1, 'devices': {'h2': snapshot()}})
