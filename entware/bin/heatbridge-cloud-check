@@ -3,24 +3,47 @@
 set -u
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
 command -v curl >/dev/null 2>&1 || { echo 'curl is required.' >&2; exit 1; }
+date -u '+UTC=%Y-%m-%dT%H:%M:%SZ'
+if [ -x /opt/etc/init.d/S85heatbridge-alice ]; then
+ if /opt/etc/init.d/S85heatbridge-alice status >/dev/null 2>&1; then
+  echo 'ALICE_AGENT=RUNNING'
+ else
+  echo 'ALICE_AGENT=NOT_RUNNING'
+ fi
+else
+ echo 'ALICE_AGENT=STATUS_SCRIPT_MISSING'
+fi
 failed=0
 check() {
  name="$1"
  url="$2"
  # Do not follow redirects: a captive portal must not look like this service.
  # No --fail: 401/403/404 also prove an HTTP service answered over verified TLS.
- if code="$(curl --proto '=https' --connect-timeout 5 --max-time 10 \
-   -sS -o /dev/null -w '%{http_code}' "$url" 2>/dev/null)"; then
-  case "$code" in
-   [1-5][0-9][0-9]) printf '%s HTTP=%s TLS_OK\n' "$name" "$code";;
+ # -q must be first: ignore default curl configs, including saved credentials.
+ # Use direct HTTPS, without environment proxies, credentials or redirects.
+ if result="$(curl -q --noproxy '*' --proto '=https' \
+   --connect-timeout 5 --max-time 8 --head \
+   -sS -o /dev/null -w '%{http_code} dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s total=%{time_total}s' "$url" 2>/dev/null)"; then
+  case "$result" in
+   [1-5][0-9][0-9]\ *) printf '%s TLS_OK HTTP=%s\n' "$name" "$result";;
    *) printf '%s NO_VALID_HTTP_RESPONSE\n' "$name"; failed=1;;
   esac
  else
-  printf '%s CONNECTION_FAILED\n' "$name"; failed=1
+  rc=$?
+  case "$rc" in
+   6) reason=DNS_FAILED;;
+   7) reason=CONNECT_FAILED;;
+   28) reason=TIMEOUT;;
+   35) reason=TLS_FAILED;;
+   60) reason=CERTIFICATE_FAILED;;
+   *) reason=CURL_FAILED;;
+  esac
+  printf '%s %s curl_exit=%s\n' "$name" "$reason" "$rc"; failed=1
  fi
 }
 check CloudFunctions https://functions.yandexcloud.net/
 check MessageQueue https://message-queue.api.cloud.yandex.net/
 check ObjectStorage https://storage.yandexcloud.net/
+check DiskWebDAV https://webdav.yandex.ru/
 printf '%s\n' 'This checks endpoint access only; account permissions and actual delivery are not tested.'
 exit "$failed"
