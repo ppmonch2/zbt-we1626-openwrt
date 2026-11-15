@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
 ROOT=Path(__file__).resolve().parents[1]
 TOKEN='a1'*16
@@ -29,6 +30,30 @@ print(json.dumps({'ok':True,'encrypted_session':True,'command_acknowledged':sys.
   run=subprocess.run(['sh',str(ROOT/'entware/www/cgi-bin/api')],input=body,text=True,env=env,capture_output=True)
   self.assertEqual(run.returncode,0,run.stderr)
   return json.loads(run.stdout.split('\n\n',1)[1])
+ def test_cached_status_is_recent_sanitized_and_never_calls_heater(self):
+  cfg=json.loads(self.cfg.read_text());cfg['heaters']['h1']['verified']=True
+  self.cfg.write_text(json.dumps(cfg))
+  state_dir=self.root/'device-runtime/states';state_dir.mkdir(parents=True)
+  now=time.time()
+  snap={'heater':'h1','online':True,'observed_at':now,
+   'field_observed_at':{'reported_target':now,'current_temperature':now-120,'device_mode':now},
+   'result':{'encrypted_session':True,'reported_target':23,'current_temperature':18.5,
+    'device_mode':1,'token':TOKEN}}
+  (state_dir/'h1.json').write_text(json.dumps(snap))
+  data=self.request(HEATBRIDGE_DEVICE_RUNTIME=str(self.root/'device-runtime'))
+  self.assertEqual(data['states']['h1']['reported_target'],23)
+  self.assertEqual(data['states']['h1']['device_mode'],1)
+  self.assertIsNone(data['states']['h1']['current_temperature'])
+  self.assertNotIn(TOKEN,json.dumps(data))
+  self.assertFalse((self.root/'calls').exists())
+  snap['field_observed_at']['current_temperature']=now
+  (state_dir/'h1.json').write_text(json.dumps(snap))
+  self.assertEqual(self.request(HEATBRIDGE_DEVICE_RUNTIME=str(self.root/'device-runtime'))
+                    ['states']['h1']['current_temperature'],18.5)
+  snap['observed_at']=now-120
+  (state_dir/'h1.json').write_text(json.dumps(snap))
+  self.assertEqual(self.request(HEATBRIDGE_DEVICE_RUNTIME=str(self.root/'device-runtime'))
+                    ['states'],{})
  def test_get_does_not_expose_token_or_device_id(self):
   data=self.request();self.assertTrue(data['ok'])
   self.assertNotIn(TOKEN,json.dumps(data));self.assertNotIn('aabbccddeeff',json.dumps(data))
