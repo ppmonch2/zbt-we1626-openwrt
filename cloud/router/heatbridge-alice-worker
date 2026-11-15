@@ -4,6 +4,15 @@ set -eu
 umask 077
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
 base="${HEATBRIDGE_PREFIX:-/opt}"
+device_child=''
+cleanup() {
+ if [ -n "$device_child" ]; then
+  kill "$device_child" 2>/dev/null || true
+  wait "$device_child" 2>/dev/null || true
+ fi
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM HUP
 state="$base/var/lib/heatbridge-alice/requests"
 mkdir -p "$state"
 chmod 700 "$state"
@@ -35,9 +44,15 @@ if ! mkdir "$record" 2>/dev/null; then
 fi
 printf '%s\n' "$job" > "$record/job.json"
 printf '{"id":"%s","heater":"%s","action":"%s","value":%s,"ok":false,"error":"unconfirmed_may_have_been_applied"}\n' "$id" "$heater" "$action" "$value" > "$record/result.json"
+device_ok=false
 if jq -e --arg id "$heater" --argjson expires "$expires" \
- '($expires>now) and (.heaters[$id].verified==true)' "$base/etc/heatbridge/config.json" >/dev/null 2>&1 &&
- "$base/bin/heatbridge-device" "$action" "$heater" "$value" > "$record/device.json" 2>/dev/null; then
+ '($expires>now) and (.heaters[$id].verified==true)' "$base/etc/heatbridge/config.json" >/dev/null 2>&1; then
+ "$base/bin/heatbridge-device" "$action" "$heater" "$value" > "$record/device.json" 2>/dev/null &
+ device_child=$!
+ if wait "$device_child"; then device_ok=true; fi
+ device_child=''
+fi
+if [ "$device_ok" = true ]; then
  if jq -ce --slurpfile result "$record/device.json" '
    . as $job | $result[0] as $r |
    if ($r.encrypted_session==true and $r.command_acknowledged==true and

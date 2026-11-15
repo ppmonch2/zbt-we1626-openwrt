@@ -6,7 +6,9 @@ on:
     paths:
       - cloud/**
       - tests/test_alice*.py
+      - tests/test_disk_ui.cjs
       - entware/bin/heatbridge-device
+      - entware/www/**
       - .github/workflows/alice-check.yml
 permissions:
   contents: read
@@ -19,6 +21,9 @@ jobs:
       - name: Validate optional router scripts and cloud provider
         run: |
           for script in cloud/router/*; do sh -n "$script"; done
+          sh -n entware/www/cgi-bin/disk-api
+          node --check entware/www/disk.js
+          node tests/test_disk_ui.cjs
           python3 -m unittest discover -s tests -p 'test_alice*.py' -v
           python3 cloud/package.py
       - uses: actions/upload-artifact@v4

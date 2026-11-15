@@ -14,7 +14,7 @@ POWER = 'devices.capabilities.on_off'
 IDS = {'h1', 'h2', 'h3', 'h4'}
 # Keep 200 ms of Alice's three-second window for dispatch/serialization/network.
 RESPONSE_BUDGET = 2.8
-VERSION = '0.1.9'
+VERSION = '0.2.0'
 
 
 def failure(code, message=None):
@@ -118,6 +118,7 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
     if any(not isinstance(device, dict) or not isinstance(device.get('id'), str) for device in devices):
         return {**response, 'payload': {'error_code': 'INVALID_ACTION'}}
     output, pending = [], []
+    batch_submit = getattr(services, 'submit_many', None)
     for device in devices:
         heater = device['id']
         entry = {'id': heater}
@@ -177,31 +178,51 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
             job = {'id': hashlib.sha256(identity.encode()).hexdigest(), 'heater': heater,
                    'action': action, 'value': value,
                    'expires_at': time.time() + max(0, deadline - time.monotonic() - .1)}
+            if batch_submit:
+                pending.append((job, result))
+                continue
             try:
                 services.submit(job, deadline)
                 trace('queue_submitted', job_id=job['id'])
                 pending.append((job, result))
             except ServiceError as exc:
                 trace('queue_submit_failed', **error_details(exc))
+    if batch_submit and pending:
+        try:
+            batch_submit([job for job, result in pending], deadline)
+            trace('disk_batch_submitted', commands=len(pending), batch_id=getattr(services, 'batch', None))
+        except ServiceError as exc:
+            trace('disk_batch_submit_failed', **error_details(exc))
+            pending.clear()
     ack_errors = set()
     while pending and time.monotonic() < deadline:
+        batch_acks = None
+        if hasattr(services, 'acknowledgements'):
+            try:
+                batch_acks = services.acknowledgements(deadline)
+            except ServiceError as exc:
+                if 'batch' not in ack_errors:
+                    trace('ack_read_failed', **error_details(exc))
+                    ack_errors.add('batch')
+                batch_acks = {}
         for job, result in pending[:]:
             try:
-                ack = services.acknowledgement(job['id'], deadline)
+                ack = (batch_acks.get(job['id']) if batch_acks is not None else
+                       services.acknowledgement(job['id'], deadline))
             except ServiceError as exc:
                 if job['id'] not in ack_errors:
                     trace('ack_read_failed', **error_details(exc))
                     ack_errors.add(job['id'])
                 ack = None
             if ack is not None:
-                if confirmed(ack, job):
+                if time.monotonic() < deadline and confirmed(ack, job):
                     result['state']['action_result'] = {'status': 'DONE'}
                     trace('heater_confirmed', job_id=job['id'])
                 else:
                     trace('heater_confirmation_rejected', job_id=job['id'])
                 pending.remove((job, result))
         if pending:
-            time.sleep(min(.03, max(0, deadline - time.monotonic())))
+            time.sleep(min(getattr(services, 'poll_interval', .03), max(0, deadline - time.monotonic())))
     if pending:
         trace('confirmation_deadline')
     return {**response, 'payload': {'devices': output}}
@@ -229,11 +250,49 @@ def handler(event, context):
         except (ValueError, UnicodeError):
             return {'payload': {'error_code': 'INVALID_ACTION'}}
     if event == {'heatbridge_diagnostic': 'version'}:
+        disk_transport = os.environ.get('HEATBRIDGE_TRANSPORT', 'cloud') == 'disk'
         return {'version': VERSION, 'heater_control': False,
-                'parallel_ack_connection': True, 'owner_check_cache_seconds': 30,
+                'transport': os.environ.get('HEATBRIDGE_TRANSPORT', 'cloud'),
+                'parallel_ack_connection': not disk_transport, 'owner_check_cache_seconds': 30,
                 'response_budget_seconds': RESPONSE_BUDGET,
                 'state_reporting': 'auto', 'state_max_age_seconds': STATE_MAX_AGE,
-                'state_router_min_version': '0.1.3'}
+                'state_router_min_version': '0.2.0' if disk_transport else '0.1.3'}
+    if event == {'heatbridge_diagnostic': 'disk_probe'}:
+        services = None
+        try:
+            services = from_environment()
+            if getattr(services, 'transport', None) != 'disk':
+                return {'diagnostic': 'disk_probe', 'heater_control': False, 'status': 'SELECT_DISK_TRANSPORT'}
+            return {'diagnostic': 'disk_probe', **services.probe(time.monotonic() + 2.5)}
+        except (KeyError, ValueError, TypeError):
+            return {'diagnostic': 'disk_probe', 'heater_control': False, 'status': 'INVALID_CONFIGURATION'}
+        except ServiceError as exc:
+            return {'diagnostic': 'disk_probe', 'heater_control': False, 'status': 'ERROR', **error_details(exc)}
+        finally:
+            if services:
+                services.close()
+    if event == {'heatbridge_diagnostic': 'disk_status'}:
+        services = None
+        result = {'diagnostic': 'disk_status', 'heater_control': False, 'version': VERSION}
+        try:
+            services = from_environment()
+            if getattr(services, 'transport', None) != 'disk':
+                return {**result, 'status': 'SELECT_DISK_TRANSPORT'}
+            snapshot = services.state_snapshot(time.monotonic() + 2.5)
+            if snapshot is None:
+                return {**result, 'status': 'NO_ROUTER_STATE'}
+            if not supported(snapshot):
+                return {**result, 'status': 'INVALID_ROUTER_STATE'}
+            return {**result, 'status': 'OK', 'published_at': snapshot.get('published_at'),
+                    'devices': {heater: (observed_state(snapshot, heater) or
+                                        {'error_code': 'DEVICE_UNREACHABLE'}) for heater in sorted(IDS)}}
+        except (KeyError, ValueError, TypeError):
+            return {**result, 'status': 'INVALID_CONFIGURATION'}
+        except ServiceError as exc:
+            return {**result, 'status': 'ERROR', **error_details(exc)}
+        finally:
+            if services:
+                services.close()
     # This exact console-only envelope cannot supply a live job or credentials.
     # expires_at=0 ensures the router rejects the probe before hardware access.
     if event == {'heatbridge_diagnostic': 'expired_queue_probe'}:

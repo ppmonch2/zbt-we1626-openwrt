@@ -1,0 +1,73 @@
+#!/opt/bin/sh
+set -eu
+umask 077
+export PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+base="${HEATBRIDGE_PREFIX:-/opt}"
+runtime="${HEATBRIDGE_ALICE_RUNTIME:-/tmp/heatbridge-alice}"
+. "$base/bin/heatbridge-disk-lib"
+disk_init || { echo 'Invalid disk configuration.' >&2; exit 1; }
+telemetry_pid=''
+batch_pid=''
+sleep_pid=''
+cleanup() {
+ for pid in $telemetry_pid $batch_pid $sleep_pid; do kill "$pid" 2>/dev/null || true; done
+ for pid in $telemetry_pid $batch_pid $sleep_pid; do wait "$pid" 2>/dev/null || true; done
+}
+trap cleanup EXIT
+trap '' HUP
+trap 'exit 0' INT TERM
+round=0
+while :; do
+ if [ -z "$telemetry_pid" ] || ! kill -0 "$telemetry_pid" 2>/dev/null; then
+  HEATBRIDGE_STATE_TRANSPORT=disk "$base/bin/heatbridge-alice-state" &
+  telemetry_pid=$!
+ fi
+ if disk_names commands > "$disk_work/commands.txt"; then
+  printf '%s\n' 'disk_connected_waiting' > "$runtime/status"
+  head -n 32 "$disk_work/commands.txt" > "$disk_work/todo.txt"
+  while IFS= read -r name; do
+   batch="${name%.json}"
+   if ! disk_http GET "/commands/$name" "$disk_work/job.json"; then
+    printf '%s\n' 'disk_download_failed' > "$runtime/status"
+    continue
+   fi
+   "$base/bin/heatbridge-disk-batch" "$disk_work/job.json" "$batch" > "$disk_work/acks.json" &
+   batch_pid=$!
+   outcome=0; wait "$batch_pid" || outcome=$?; batch_pid=''
+   if [ "$outcome" = 0 ]; then
+    if ! disk_http PUT "/acks/$name" /dev/null -H 'Content-Type: application/json' \
+         --data-binary "@$disk_work/acks.json"; then
+     printf '%s\n' 'disk_ack_upload_failed' > "$runtime/status"
+     continue
+    fi
+    printf '%s\n' 'disk_batch_processed' > "$runtime/status"
+   else
+    printf '%s\n' 'disk_invalid_batch_rejected' > "$runtime/status"
+   fi
+   disk_http DELETE "/commands/$name" /dev/null || true
+  done < "$disk_work/todo.txt"
+ else
+  printf '%s\n' 'disk_connection_failed' > "$runtime/status"
+ fi
+ round=$((round+1))
+ # Bounded cleanup of ACKs older than a day, using our timestamped filenames.
+ if [ "$round" -ge 600 ]; then
+  round=0
+  if disk_names acks > "$disk_work/acks.txt"; then
+   cutoff="$(($(date +%s)-86400))"
+   head -n 64 "$disk_work/acks.txt" > "$disk_work/old.txt"
+   while IFS= read -r name; do
+    stamp="${name%%-*}"
+    if [ "$stamp" -lt "$cutoff" ]; then disk_http DELETE "/acks/$name" /dev/null || true; fi
+   done < "$disk_work/old.txt"
+  fi
+  if [ -d "$base/var/lib/heatbridge-alice/requests" ]; then
+   find "$base/var/lib/heatbridge-alice/requests" -type f -mtime +2 -exec rm -f '{}' \; || true
+   find "$base/var/lib/heatbridge-alice/requests" -mindepth 1 -maxdepth 1 -type d -exec rmdir '{}' \; 2>/dev/null || true
+  fi
+ fi
+ # One collection poll per second plus network latency. Back off on failure.
+ delay=1
+ [ "$(cat "$runtime/status")" != disk_connection_failed ] || delay=5
+ sleep "$delay" & sleep_pid=$!; wait "$sleep_pid" || true; sleep_pid=''
+done

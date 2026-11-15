@@ -27,7 +27,7 @@ class ServiceError(Exception):
 def error_details(error):
     # Never log exception text, response bodies, URLs or signed request headers.
     details = {}
-    if error.service in ('sqs', 's3'):
+    if error.service in ('sqs', 's3', 'webdav'):
         details['service'] = error.service
     if type(error.http_status) is int:
         details['http_status'] = error.http_status
@@ -39,7 +39,7 @@ def error_details(error):
     reason = error.args[0] if error.args else None
     if reason in ('deadline', 'cloud_http_error', 'cloud_connection_error',
                   'oversized_response', 'queue_rejected', 'invalid_queue_response',
-                  'invalid_acknowledgement', 'invalid_state_snapshot'):
+                  'invalid_acknowledgement', 'invalid_state_snapshot', 'invalid_probe_response'):
         details['reason'] = reason
     return details
 
@@ -287,5 +287,13 @@ def cached_owner_authorized(authorization, owner_uid, deadline):
 
 
 def from_environment():
+    transport = os.environ.get('HEATBRIDGE_TRANSPORT', 'cloud')
+    if transport == 'disk':
+        from disk_services import DiskServices
+        return DiskServices(os.environ['HEATBRIDGE_DISK_LOGIN'],
+                            os.environ['HEATBRIDGE_DISK_APP_PASSWORD'],
+                            os.environ.get('HEATBRIDGE_DISK_FOLDER', 'heatbridge-v1'))
+    if transport != 'cloud':
+        raise ValueError('Invalid transport')
     return Services(os.environ['HEATBRIDGE_QUEUE_URL'], os.environ['HEATBRIDGE_ACK_BUCKET'],
                     os.environ['AWS_ACCESS_KEY_ID'], os.environ['AWS_SECRET_ACCESS_KEY'])

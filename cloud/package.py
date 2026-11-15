@@ -12,22 +12,35 @@ OUT = ROOT.parent/'output-alice'
 def main():
     OUT.mkdir(exist_ok=True)
     with zipfile.ZipFile(OUT/'Ballu-Alice-Function.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
-        for name in ('skill.py', 'yandex_services.py', 'diagnostics.py', 'device_state.py'):
+        for name in ('skill.py', 'yandex_services.py', 'diagnostics.py', 'device_state.py', 'disk_services.py'):
             archive.write(ROOT/'alice'/name, name)
     with tempfile.TemporaryDirectory() as tmp:
         bundle = Path(tmp)/'heatbridge-alice'
         bundle.mkdir()
         hashes = []
         for name in ('heatbridge-alice', 'heatbridge-alice-worker', 'heatbridge-alice-state',
-                     'S85heatbridge-alice', 'install.sh', 'heatbridge-device'):
+                     'S85heatbridge-alice', 'install.sh', 'heatbridge-device',
+                     'heatbridge-disk-lib', 'heatbridge-disk-agent', 'heatbridge-disk-batch',
+                     'heatbridge-disk-control'):
             source = ROOT.parent/'entware/bin'/name if name == 'heatbridge-device' else ROOT/'router'/name
             data = source.read_bytes()
             path = bundle/name
             path.write_bytes(data);path.chmod(0o755)
             hashes.append(hashlib.sha256(data).hexdigest()+'  '+name)
+        for name in ('index.html', 'disk.html', 'disk.js', 'cgi-bin/disk-api'):
+            data = (ROOT.parent/'entware/www'/name).read_bytes()
+            path = bundle/'www'/name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            path.chmod(0o755 if name.startswith('cgi-bin/') else 0o644)
+            hashes.append(hashlib.sha256(data).hexdigest()+'  www/'+name)
         (bundle/'SHA256SUMS').write_text('\n'.join(hashes)+'\n')
         with tarfile.open(OUT/'Ballu-Alice-Router.tar.gz', 'w:gz') as archive:
             archive.add(bundle, arcname=bundle.name)
+        with zipfile.ZipFile(OUT/'Ballu-Alice-Router.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(bundle.rglob('*')):
+                if path.is_file():
+                    archive.write(path, str(path.relative_to(Path(tmp))))
     lines = [hashlib.sha256(path.read_bytes()).hexdigest()+'  '+path.name
              for path in sorted(OUT.iterdir()) if path.suffix in ('.zip', '.gz')]
     (OUT/'SHA256SUMS').write_text('\n'.join(lines)+'\n')

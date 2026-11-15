@@ -16,6 +16,9 @@ def read_ack_probe(job_id):
     except (KeyError, ValueError, TypeError):
         return {**result, 'configuration': 'invalid'}
     started = time.monotonic()
+    if getattr(services, 'transport', None) == 'disk':
+        services.close()
+        return {**result, 'status': 'USE_DISK_PROBE', 'transport': 'disk'}
     result['bucket'] = services.bucket
     try:
         ack = services.acknowledgement(job_id, started + 2.35)

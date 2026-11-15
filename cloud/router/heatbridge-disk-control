@@ -1,0 +1,98 @@
+#!/opt/bin/sh
+# Authenticated local CGI calls this helper; no private fields on stdout.
+set -eu
+umask 077
+export PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+base="${HEATBRIDGE_PREFIX:-/opt}"
+runtime="${HEATBRIDGE_ALICE_RUNTIME:-/tmp/heatbridge-alice}"
+mkdir -p "$runtime"
+lock="$runtime/disk-control.lock"
+reply_error() { jq -cn --arg error "$1" '{ok:false,error:$error}'; exit 0; }
+mkdir "$lock" 2>/dev/null || reply_error busy
+cleanup() { rm -f "$lock/input.json" "$lock/config.json"; rmdir "$lock" 2>/dev/null || true; }
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+head -c 2049 > "$lock/input.json"
+[ "$(wc -c < "$lock/input.json")" -le 2048 ] || reply_error invalid_input
+action="$(jq -er '.action|select(type=="string")' "$lock/input.json" 2>/dev/null)" || reply_error invalid_input
+. "$base/bin/heatbridge-disk-lib"
+init="$base/etc/init.d/S85heatbridge-alice"
+message=''
+case "$action" in
+ status) ;;
+ save)
+  jq '{login,password,folder,enabled:false}' "$lock/input.json" > "$lock/config.json" || reply_error invalid_input
+  disk_config="$lock/config.json"
+  disk_validate || reply_error invalid_credentials
+  "$init" stop >/dev/null 2>&1 || reply_error stop_failed
+  mkdir -p "$base/etc/heatbridge"
+  chmod 700 "$base/etc/heatbridge"
+  # Rename within the configuration filesystem; no partially written secret file.
+  tmp="$(mktemp "$base/etc/heatbridge/.disk.XXXXXX")" || reply_error save_failed
+  cat "$lock/config.json" > "$tmp"
+  chmod 600 "$tmp"
+  mv "$tmp" "$base/etc/heatbridge/disk.json"
+  rm -f "$runtime/disk-checked"
+  disk_config="$base/etc/heatbridge/disk.json"
+  message=saved_not_started
+  ;;
+ check)
+  rm -f "$runtime/disk-checked"
+  disk_init || reply_error invalid_credentials
+  disk_prepare || reply_error "webdav_http_$disk_code"
+  nonce="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+  jq -cn --arg nonce "$nonce" '{probe:$nonce}' > "$disk_work/probe.json"
+  path="/probes/$nonce.json"
+  disk_http PUT "$path" /dev/null -H 'Content-Type: application/json' \
+   --data-binary "@$disk_work/probe.json" || reply_error "webdav_http_$disk_code"
+  matched=false
+  if disk_http GET "$path" "$disk_work/probe-read.json" &&
+     cmp -s "$disk_work/probe.json" "$disk_work/probe-read.json"; then matched=true; fi
+  disk_http DELETE "$path" /dev/null || reply_error probe_cleanup_failed
+  [ "$matched" = true ] || reply_error probe_read_failed
+  sha256sum "$disk_config" | cut -d ' ' -f 1 > "$runtime/disk-checked"
+  message=write_read_delete_ok
+  ;;
+ start)
+  disk_validate || reply_error invalid_credentials
+  fingerprint="$(sha256sum "$disk_config" | cut -d ' ' -f 1)"
+  [ -s "$runtime/disk-checked" ] && [ "$(cat "$runtime/disk-checked")" = "$fingerprint" ] || reply_error check_first
+  "$init" stop >/dev/null 2>&1 || reply_error stop_failed
+  tmp="$(mktemp "$base/etc/heatbridge/.disk.XXXXXX")"
+  jq '.enabled=true' "$disk_config" > "$tmp"
+  chmod 600 "$tmp"; mv "$tmp" "$disk_config"
+  sha256sum "$disk_config" | cut -d ' ' -f 1 > "$runtime/disk-checked"
+  "$init" start >/dev/null 2>&1 || reply_error start_failed
+  message=disk_started
+  ;;
+ stop)
+  "$init" stop >/dev/null 2>&1 || reply_error stop_failed
+  message=stopped_until_restart
+  ;;
+ use_cloud)
+  [ -s "$base/etc/heatbridge/alice.json" ] || reply_error cloud_not_configured
+  "$init" stop >/dev/null 2>&1 || reply_error stop_failed
+  if [ -s "$disk_config" ]; then
+   tmp="$(mktemp "$base/etc/heatbridge/.disk.XXXXXX")"
+   jq '.enabled=false' "$disk_config" > "$tmp"
+   chmod 600 "$tmp"; mv "$tmp" "$disk_config"
+  fi
+  "$init" start >/dev/null 2>&1 || reply_error start_failed
+  message=cloud_started
+  ;;
+ *) reply_error invalid_action;;
+esac
+running=false
+"$init" status >/dev/null 2>&1 && running=true
+status='unknown'
+if [ -s "$runtime/status" ]; then
+ status="$(head -c 100 "$runtime/status")"
+ case "$status" in *[!a-z_]*) status=unknown;; esac
+fi
+if disk_validate; then
+ jq -c --argjson running "$running" --arg status "$status" --arg message "$message" \
+  '{ok:true,configured:true,login,folder,enabled,running:$running,status:$status,message:$message}' "$disk_config"
+else
+ jq -cn --argjson running "$running" --arg status "$status" --arg message "$message" \
+  '{ok:true,configured:false,login:"",folder:"heatbridge-v1",enabled:false,running:$running,status:$status,message:$message}'
+fi

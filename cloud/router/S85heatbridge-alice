@@ -1,18 +1,22 @@
 #!/opt/bin/sh
 set -eu
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
-pidfile=/tmp/heatbridge-alice.pid
-agent=/opt/bin/heatbridge-alice
+base="${HEATBRIDGE_PREFIX:-/opt}"
+pidfile="${HEATBRIDGE_ALICE_PIDFILE:-/tmp/heatbridge-alice.pid}"
+agent="$base/bin/heatbridge-alice"
 running() {
  [ -s "$pidfile" ] || return 1
  pid="$(cat "$pidfile")"
  case "$pid" in ''|*[!0-9]*) return 1;; esac
- [ -r "/proc/$pid/cmdline" ] && tr '\0' ' ' < "/proc/$pid/cmdline" | grep -Fq "$agent"
+ [ -r "/proc/$pid/cmdline" ] && tr '\0' '\n' < "/proc/$pid/cmdline" |
+  grep -Fxq -e "$agent" -e "$base/bin/heatbridge-disk-agent"
 }
 case "${1:-}" in
  start)
   if running; then echo 'Alice agent is already running.'; exit 0; fi
-  [ -s /opt/etc/heatbridge/alice.json ] || { echo 'Private alice.json is required.' >&2; exit 1; }
+  if ! jq -e '.enabled==true' "$base/etc/heatbridge/disk.json" >/dev/null 2>&1; then
+   [ -s "$base/etc/heatbridge/alice.json" ] || { echo 'Private alice.json is required.' >&2; exit 1; }
+  fi
   "$agent" >/tmp/heatbridge-alice.log 2>&1 &
   printf '%s\n' "$!" > "$pidfile"
   sleep 1

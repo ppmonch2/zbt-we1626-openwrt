@@ -42,6 +42,7 @@ cp "$here/bin/heatbridge-syncleo" /opt/libexec/
 cp "$here/init.d/S80heatbridge" /opt/etc/init.d/
 cp -R "$here/www" /opt/share/heatbridge/
 chmod 755 /opt/bin/heatbridge-device /opt/bin/heatbridge-public-permissions /opt/libexec/heatbridge-syncleo /opt/etc/init.d/S80heatbridge /opt/share/heatbridge/www/cgi-bin/api
+chmod 755 /opt/share/heatbridge/www/cgi-bin/disk-api
 /opt/bin/heatbridge-public-permissions
 if [ ! -s /opt/etc/heatbridge/httpd.conf ]; then
  echo 'Choose a NEW password for the local web user heatbridge (12+ characters).'

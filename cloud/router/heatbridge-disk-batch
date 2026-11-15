@@ -1,0 +1,63 @@
+#!/opt/bin/sh
+# Process one already downloaded batch. Different heaters run concurrently;
+# operations on the same heater remain ordered. Existing durable claims apply.
+set -eu
+umask 077
+export PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+base="${HEATBRIDGE_PREFIX:-/opt}"
+runtime="${HEATBRIDGE_ALICE_RUNTIME:-/tmp/heatbridge-alice}"
+file="$1"
+batch="$2"
+work="$runtime/disk/batch"
+mkdir -p "$work"
+rm -f "$work"/h?.jsonl
+children=''
+cleanup() {
+ for pid in $children; do kill "$pid" 2>/dev/null || true; done
+ for pid in $children; do wait "$pid" 2>/dev/null || true; done
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM HUP
+jq -e --arg batch "$batch" '
+ .schema==1 and .batch==$batch and
+ (.jobs|type=="array" and length>=1 and length<=8) and
+ (.jobs|map(.id)|unique|length)==(.jobs|length) and
+ (.jobs|map([.heater,.action])|unique|length)==(.jobs|length) and
+ (.jobs|all(type=="object" and
+  (.heater=="h1" or .heater=="h2" or .heater=="h3" or .heater=="h4") and
+  (.action=="set" or .action=="mode") and
+  (.id|type=="string" and length==64 and
+   (explode|all((.>=48 and .<=57) or (.>=97 and .<=102))))))
+' "$file" >/dev/null 2>&1 || exit 1
+run_heater() {
+ heater="$1"
+ job_child=''
+ trap 'if [ -n "$job_child" ]; then kill "$job_child" 2>/dev/null || true; wait "$job_child" 2>/dev/null || true; fi; exit 1' INT TERM HUP
+ jq -c --arg heater "$heater" '.jobs[]|select(.heater==$heater)' "$file" > "$work/$heater.jobs"
+ while IFS= read -r job; do
+  id="$(printf '%s' "$job" | jq -r .id)"
+  record="$base/var/lib/heatbridge-alice/requests/$id/result.json"
+  # Recover an ACK after a failed upload, even if the command has since expired.
+  if [ -s "$record" ]; then
+   cat "$record" >> "$work/$heater.jsonl"
+  else
+   printf '%s' "$job" > "$work/$heater.input"
+   "$base/bin/heatbridge-alice-worker" < "$work/$heater.input" > "$work/$heater.output" 2>/dev/null &
+   job_child=$!
+   if wait "$job_child"; then cat "$work/$heater.output" >> "$work/$heater.jsonl"; fi
+   job_child=''
+  fi
+ done < "$work/$heater.jobs"
+}
+for heater in h1 h2 h3 h4; do
+ run_heater "$heater" &
+ children="$children $!"
+done
+for pid in $children; do wait "$pid" || true; done
+children=''
+set --
+for heater in h1 h2 h3 h4; do
+ [ ! -s "$work/$heater.jsonl" ] || set -- "$@" "$work/$heater.jsonl"
+done
+jq -cs --arg batch "$batch" '{schema:1,batch:$batch,published_at:now,
+ acks:(map({key:.id,value:.})|from_entries)}' "$@" < /dev/null

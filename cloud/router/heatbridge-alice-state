@@ -16,9 +16,14 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 0' INT TERM HUP
-bucket="$(jq -r .ack_bucket "$base/etc/heatbridge/alice.json")"
-case "$bucket" in ''|*[!a-z0-9.-]*) exit 1;; esac
-[ -s "$runtime/curl.conf" ] || exit 1
+if [ "${HEATBRIDGE_STATE_TRANSPORT:-cloud}" = disk ]; then
+ . "$base/bin/heatbridge-disk-lib"
+ disk_init || exit 1
+else
+ bucket="$(jq -r .ack_bucket "$base/etc/heatbridge/alice.json")"
+ case "$bucket" in ''|*[!a-z0-9.-]*) exit 1;; esac
+ [ -s "$runtime/curl.conf" ] || exit 1
+fi
 publish() {
  set --
  for state_id in h1 h2 h3 h4; do
@@ -26,16 +31,21 @@ publish() {
  done
  # Empty stdin handles startup before the first successful observation.
  jq -cs --slurpfile config "$base/etc/heatbridge/config.json" '
-  {schema:1,bridge_version:"0.1.3",published_at:now,
+  {schema:1,bridge_version:"0.2.0",published_at:now,
    devices:(map(select(.heater as $id | $config[0].heaters[$id].verified==true)) |
     map({key:.heater,value:{heater,online,observed_at,field_observed_at,
      result:(.result|{encrypted_session,reported_target,current_temperature,device_mode})}}) |
     from_entries)}' "$@" < /dev/null > "$work/upload.json" || return 1
- curl -q --config "$runtime/curl.conf" --proto '=https' --connect-timeout 2 \
+ if [ "${HEATBRIDGE_STATE_TRANSPORT:-cloud}" = disk ]; then
+  disk_http PUT /acks/state-v1.json /dev/null -H 'Content-Type: application/json' \
+   --data-binary "@$work/upload.json" &
+ else
+  curl -q --config "$runtime/curl.conf" --proto '=https' --connect-timeout 2 \
   --max-time 3 -fsS --aws-sigv4 'aws:amz:ru-central1:s3' -X PUT \
   -H 'Content-Type: application/json' --data-binary "@$work/upload.json" \
   "https://storage.yandexcloud.net/$bucket/acks/state-v1.json" \
-  > /dev/null 2> /dev/null &
+   > /dev/null 2> /dev/null &
+ fi
  child=$!
  if wait "$child"; then
   child=''; printf '%s\n' 'published' > "$work/status"

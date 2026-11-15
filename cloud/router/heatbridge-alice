@@ -5,6 +5,10 @@ umask 077
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
 base="${HEATBRIDGE_PREFIX:-/opt}"
 config="$base/etc/heatbridge/alice.json"
+if [ -s "$base/etc/heatbridge/disk.json" ] &&
+   jq -e '.enabled==true' "$base/etc/heatbridge/disk.json" >/dev/null 2>&1; then
+ exec "$base/bin/heatbridge-disk-agent"
+fi
 runtime="${HEATBRIDGE_ALICE_RUNTIME:-/tmp/heatbridge-alice}"
 mkdir -p "$runtime"
 chmod 700 "$runtime"

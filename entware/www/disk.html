@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+<title>Связь через Яндекс Диск</title><link rel="stylesheet" href="style.css"></head>
+<body><main><header><a href="index.html">← Обогреватели</a><h1>Связь через Яндекс Диск</h1>
+<p>Диск передаёт команды Алисы и показания обогревателей. Сначала проверьте обмен файлами на дачном подключении во время ограничений.</p></header>
+<article><h2>1. Подключить Диск</h2>
+<p>Нужен пароль приложения Яндекса для «Файлы WebDAV». Введите его без пробелов. Это отдельный пароль, не пароль входа в аккаунт. Доступ WebDAV зависит от вашего тарифа Яндекс 360.</p>
+<form id="settings"><label for="login">Логин Яндекса</label><input id="login" autocomplete="username" required maxlength="120">
+<label for="password">Пароль приложения</label><input id="password" type="password" autocomplete="new-password" required minlength="16" maxlength="128">
+<label for="folder">Папка обмена</label><input id="folder" value="heatbridge-v1" required maxlength="64" pattern="[A-Za-z0-9_-]+">
+<p class="small">Сохранение остановит удалённый канал до следующего запуска. Локальные кнопки управления продолжат работать.</p>
+<button type="submit">Сохранить настройки</button></form></article>
+<article><h2>2. Проверить связь</h2><p>Создаём служебные папки, записываем тестовый файл, читаем его и удаляем. Температура не меняется.</p>
+<button id="check">Проверить запись и чтение</button></article>
+<article><h2>3. Включить канал</h2><p>В облачной функции тоже должен быть выбран Диск с тем же аккаунтом и папкой. Успешная проверка файлов ещё не подтверждает скорость выполнения команд Алисы.</p>
+<div class="controls"><button id="start">Запустить через Диск</button><button id="stop" class="secondary">Остановить до перезапуска роутера</button></div>
+<details><summary>Вернуться к прежнему каналу</summary><p>Перед возвратом выберите прежний канал и в облачной функции.</p><button id="use_cloud" class="secondary">Включить прежнюю очередь</button></details></article>
+<p id="notice" role="status" aria-live="polite"></p><p id="connection"></p><button id="refresh" class="secondary">Обновить статус</button>
+<footer>Проверка ничего не включает. Сообщение «Канал запущен» означает запуск программы, а не подтверждение связи со всеми приборами. При отсутствии подтверждения Алиса покажет ошибку. После восстановления связи просроченные команды не выполняются.</footer>
+</main><script src="disk.js"></script></body></html>

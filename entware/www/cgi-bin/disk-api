@@ -1,0 +1,28 @@
+#!/opt/bin/sh
+set -eu
+umask 077
+export PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+base="${HEATBRIDGE_PREFIX:-/opt}"
+header() { printf 'Content-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n'; }
+error() { header; jq -cn --arg error "$1" '{ok:false,error:$error}'; exit 0; }
+lan="$(jq -r .lan_ip "$base/etc/heatbridge/config.json")"
+[ "${HTTP_HOST:-}" = "$lan:8765" ] || error invalid_host
+if [ -n "${HTTP_ORIGIN:-}" ]; then
+ [ "$HTTP_ORIGIN" = "http://$lan:8765" ] || error invalid_origin
+fi
+control="$base/bin/heatbridge-disk-control"
+[ -x "$control" ] || error update_router_first
+case "${REQUEST_METHOD:-}" in
+ GET) header; printf '{"action":"status"}' | "$control";;
+ POST)
+  [ "${HTTP_ORIGIN:-}" = "http://$lan:8765" ] || error invalid_origin
+  case "${CONTENT_TYPE:-}" in application/json*) ;; *) error json_required;; esac
+  size="${CONTENT_LENGTH:-}"
+  case "$size" in ''|*[!0-9]*) error invalid_length;; esac
+  [ "$size" -ge 2 ] && [ "$size" -le 2048 ] || error invalid_length
+  payload="$(dd bs=1 count="$size" 2>/dev/null)"
+  header
+  printf '%s' "$payload" | "$control"
+  ;;
+ *) error invalid_method;;
+esac

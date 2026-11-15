@@ -1,0 +1,119 @@
+"""Private WebDAV mailbox. No public links, redirects, SDKs or router tokens."""
+import base64
+import hashlib
+import http.client
+import json
+import re
+import time
+import uuid
+
+from yandex_services import ServiceError
+
+
+class DiskServices:
+    transport = 'disk'
+    poll_interval = .12
+
+    def __init__(self, login, password, folder='heatbridge-v1', connection=None):
+        if not isinstance(login, str) or not re.fullmatch(r'[A-Za-z0-9@._+-]{1,120}', login):
+            raise ValueError('Invalid Disk login')
+        if not isinstance(password, str) or not re.fullmatch(r'[A-Za-z0-9_-]{16,128}', password):
+            raise ValueError('Invalid application password')
+        if not isinstance(folder, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', folder):
+            raise ValueError('Invalid Disk folder')
+        self.root = '/' + folder
+        self.authorization = 'Basic ' + base64.b64encode((login + ':' + password).encode()).decode()
+        self.connection = connection
+        self.batch = None
+
+    def close(self):
+        if self.connection is not None:
+            self.connection.close()
+            self.connection = None
+
+    def request(self, method, path, deadline, body=b'', missing=False):
+        if not re.fullmatch(r'/(commands|acks|probes)/[A-Za-z0-9_.-]+', path):
+            raise ValueError('Invalid Disk path')
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ServiceError('deadline', service='webdav')
+        timeout = min(.8, remaining)
+        if self.connection is None:
+            self.connection = http.client.HTTPSConnection('webdav.yandex.ru', timeout=timeout)
+        connection = self.connection
+        connection.timeout = timeout
+        if connection.sock is not None:
+            connection.sock.settimeout(timeout)
+        try:
+            connection.request(method, self.root + path, body=body, headers={
+                'Authorization': self.authorization, 'Content-Type': 'application/json',
+                'Cache-Control': 'no-cache', 'Accept': 'application/json'})
+            response = connection.getresponse()
+            status = response.status
+            data = response.read(65537)
+            response.close()
+            if len(data) > 65536:
+                self.close()
+                raise ServiceError('oversized_response', service='webdav')
+            if status == 404 and missing:
+                return None
+            if not 200 <= status < 300:
+                # Do not follow redirects or expose response bodies/credentials.
+                raise ServiceError('cloud_http_error', service='webdav', http_status=status)
+            return data
+        except (OSError, http.client.HTTPException):
+            self.close()
+            # Never replay a write automatically: its outcome may be unknown.
+            raise ServiceError('cloud_connection_error', service='webdav') from None
+
+    def read_json(self, path, deadline):
+        data = self.request('GET', path, deadline, missing=True)
+        if data is None:
+            return None
+        try:
+            return json.loads(data)
+        except (ValueError, UnicodeError):
+            raise ServiceError('invalid_acknowledgement', service='webdav') from None
+
+    def submit_many(self, jobs, deadline):
+        if not 1 <= len(jobs) <= 8:
+            raise ValueError('Invalid batch')
+        identity = hashlib.sha256(json.dumps([job['id'] for job in jobs]).encode()).hexdigest()
+        self.batch = f'{int(time.time()):010d}-{identity}'
+        body = json.dumps({'schema': 1, 'batch': self.batch, 'jobs': jobs},
+                          separators=(',', ':'), allow_nan=False).encode()
+        self.request('PUT', f'/commands/{self.batch}.json', deadline, body)
+
+    def submit(self, job, deadline):
+        self.submit_many([job], deadline)
+
+    def acknowledgements(self, deadline):
+        if self.batch is None:
+            return {}
+        data = self.read_json(f'/acks/{self.batch}.json', deadline)
+        if data is None:
+            return {}
+        if (not isinstance(data, dict) or data.get('batch') != self.batch or
+                not isinstance(data.get('acks'), dict)):
+            raise ServiceError('invalid_acknowledgement', service='webdav')
+        return data['acks']
+
+    def acknowledgement(self, job_id, deadline):
+        if not re.fullmatch(r'[a-f0-9]{64}', job_id):
+            raise ValueError('Invalid job ID')
+        return self.acknowledgements(deadline).get(job_id)
+
+    def state_snapshot(self, deadline):
+        return self.read_json('/acks/state-v1.json', deadline)
+
+    def probe(self, deadline):
+        """Write/read/delete a nonce in a folder the router never executes."""
+        path = '/probes/' + uuid.uuid4().hex + '.json'
+        body = json.dumps({'probe': uuid.uuid4().hex}).encode()
+        self.request('PUT', path, deadline, body)
+        try:
+            if self.request('GET', path, deadline) != body:
+                raise ServiceError('invalid_probe_response', service='webdav')
+        finally:
+            self.request('DELETE', path, deadline, missing=True)
+        return {'status': 'OK', 'write_read_delete': True, 'heater_control': False}

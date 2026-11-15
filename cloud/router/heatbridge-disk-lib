@@ -1,0 +1,67 @@
+#!/opt/bin/sh
+# Sourced helpers. Only this fixed HTTPS host receives the private app password.
+disk_config="$base/etc/heatbridge/disk.json"
+disk_work="$runtime/disk"
+disk_validate() {
+ jq -e '
+  def ascii($min;$max;$extra):
+   if type!="string" then false else length>=$min and length<=$max and
+    (explode|all(. as $c|($c>=48 and $c<=57) or ($c>=65 and $c<=90) or
+     ($c>=97 and $c<=122) or ($extra|contains([$c])))) end;
+  (.login|ascii(1;120;[64,46,95,43,45])) and
+  (.password|ascii(16;128;[95,45])) and
+  (.folder|ascii(1;64;[95,45])) and (.enabled|type=="boolean")
+ ' "$disk_config" >/dev/null 2>&1
+}
+disk_init() {
+ mkdir -p "$disk_work"
+ chmod 700 "$disk_work"
+ disk_validate || return 1
+ disk_folder="$(jq -r .folder "$disk_config")"
+ disk_tmp="$(mktemp "$disk_work/.curl.XXXXXX")" || return 1
+ jq -r '"user = " + ((.login+":"+.password)|@json)' "$disk_config" > "$disk_tmp"
+ chmod 600 "$disk_tmp"
+ mv "$disk_tmp" "$disk_work/curl.conf"
+}
+disk_http() {
+ # Remaining arguments are internal, never supplied by the browser.
+ disk_method="$1"; disk_path="$2"; disk_output="$3"; shift 3
+ disk_code='000'
+ disk_code="$(curl -q --config "$disk_work/curl.conf" --noproxy '*' \
+  --proto '=https' --connect-timeout 2 --max-time 3 --max-filesize 131072 \
+  -sS -X "$disk_method" -H 'Cache-Control: no-cache' \
+  -o "$disk_output" -w '%{http_code}' "$@" \
+  "https://webdav.yandex.ru/$disk_folder$disk_path" 2>/dev/null)" || return 1
+ case "$disk_code" in 2??) return 0;; *) return 1;; esac
+}
+disk_prepare() {
+ for disk_dir in '' /commands /acks /probes; do
+  if ! disk_http MKCOL "$disk_dir" /dev/null; then
+   # WebDAV reports 405 when an existing collection is created again.
+   [ "$disk_code" = 405 ] || return 1
+  fi
+ done
+}
+disk_names() {
+ disk_listing="$1"
+ disk_http PROPFIND "/$disk_listing/" "$disk_work/list-$disk_listing.xml" \
+  -H 'Depth: 1' -H 'Content-Type: application/xml' \
+  --data-binary '<d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>' || return 1
+ # Only extract href text, then enforce our exact folder and filename grammar.
+ # No XML entities, arbitrary URLs or server-provided shell expressions execute.
+ tr '\r\n' '  ' < "$disk_work/list-$disk_listing.xml" |
+  sed 's/>[[:space:]]*</>\n</g' |
+  sed -n 's@.*<[^>]*href[^>]*>\([^<]*\)</[^>]*href>.*@\1@p' |
+  while IFS= read -r disk_href; do
+   disk_href="${disk_href#https://webdav.yandex.ru}"
+   case "$disk_href" in "/$disk_folder/$disk_listing/"*) ;; *) continue;; esac
+   disk_name="${disk_href#/$disk_folder/$disk_listing/}"
+   [ "${#disk_name}" = 80 ] || continue
+   disk_stamp="${disk_name%%-*}"
+   disk_hash="${disk_name#*-}"; disk_hash="${disk_hash%.json}"
+   [ "${#disk_stamp}" = 10 ] && [ "${#disk_hash}" = 64 ] || continue
+   case "$disk_stamp" in *[!0-9]*) continue;; esac
+   case "$disk_hash" in *[!a-f0-9]*) continue;; esac
+   case "$disk_name" in *.json) printf '%s\n' "$disk_name";; esac
+  done | sort -u
+}
