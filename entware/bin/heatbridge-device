@@ -1,29 +1,106 @@
 #!/opt/bin/sh
-# One authenticated session at a time; never put a token in argv or logs.
+# One authenticated session per heater. Commands may interrupt background reads.
 set -eu
+umask 077
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
 base="${HEATBRIDGE_PREFIX:-/opt}"
+runtime="${HEATBRIDGE_DEVICE_RUNTIME:-/tmp/heatbridge}"
 config="$base/etc/heatbridge/config.json"
 client="$base/libexec/heatbridge-syncleo"
 action="${1:-}"; id="${2:-}"; value="${3:-}"
 case "$id" in h1|h2|h3|h4) ;; *) exit 1;; esac
-case "$action" in read) ;; set|mode) case "$value" in ''|*[!0-9]*) exit 1;; esac;; *) exit 1;; esac
+case "$action" in
+ read) ;;
+ set) case "$value" in ''|*[!0-9]*) exit 1;; esac; [ "$value" -ge 5 ] && [ "$value" -le 30 ] || exit 1;;
+ mode) case "$value" in 0|1|2|3) ;; *) exit 1;; esac;;
+ *) exit 1;;
+esac
 [ "$action" = read ] || [ "$(jq -r --arg id "$id" '.heaters[$id].verified // false' "$config")" = true ] || { echo probe_required >&2; exit 1; }
-mkdir -p /tmp/heatbridge
-lock=/tmp/heatbridge/device.lock
-mkdir "$lock" 2>/dev/null || { echo heater_busy >&2; exit 1; }
-trap 'rmdir "$lock" 2>/dev/null || true' EXIT
-trap 'exit 1' HUP INT TERM
+mkdir -p "$runtime/states"
+chmod 700 "$runtime/states"
+lock="$runtime/device-$id.lock"
+# Recover an abandoned lock without deleting a new owner's lock. A second
+# contender cannot reap concurrently; rename detaches only the abandoned dir.
+if [ -s "$lock/owner" ]; then
+ old_owner=''; read -r old_owner unused < "$lock/owner" || true
+ case "$old_owner" in ''|*[!0-9]*) old_owner='';; esac
+ if [ -n "$old_owner" ] && ! kill -0 "$old_owner" 2>/dev/null &&
+    mkdir "$runtime/reap-$id.lock" 2>/dev/null; then
+  current_owner=''; read -r current_owner unused < "$lock/owner" 2>/dev/null || true
+  if [ "$current_owner" = "$old_owner" ] && ! kill -0 "$old_owner" 2>/dev/null; then
+   mv "$lock" "$runtime/reap-$id.lock/abandoned" 2>/dev/null || true
+   rm -rf "$runtime/reap-$id.lock/abandoned"
+  fi
+  rmdir "$runtime/reap-$id.lock"
+ fi
+fi
+if ! mkdir "$lock" 2>/dev/null; then
+ # Only our own low-priority reader can be preempted, never a command or the
+ # user's explicit local read. Verify PID identity before sending a signal.
+ owner=''; priority=''
+ if [ -r "$lock/owner" ]; then read -r owner priority < "$lock/owner" || true; fi
+ case "$owner" in ''|*[!0-9]*) owner='';; esac
+ if [ "$action" != read ] && [ "$priority" = background ] && [ -n "$owner" ] &&
+    [ -r "/proc/$owner/cmdline" ] &&
+    tr '\0' ' ' < "/proc/$owner/cmdline" | grep -Fq "$base/bin/heatbridge-device read $id"; then
+  kill -TERM "$owner" 2>/dev/null || true
+  attempts=0
+  until mkdir "$lock" 2>/dev/null; do
+   attempts=$((attempts+1))
+   [ "$attempts" -lt 10 ] || { echo heater_busy >&2; exit 73; }
+   sleep 0.05
+  done
+ else echo heater_busy >&2; exit 73; fi
+fi
+child=''; work=''
+cleanup() {
+ if [ -n "$child" ]; then kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; fi
+ [ -z "$work" ] || rm -rf "$work"
+ rm -f "$lock/owner"
+ rmdir "$lock" 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 75' HUP INT TERM
+priority=foreground
+[ "$action" != read ] || [ "${HEATBRIDGE_BACKGROUND_READ:-0}" != 1 ] || priority=background
+printf '%s %s\n' "$$" "$priority" > "$lock/owner"
+work="$(mktemp -d "$runtime/device-$id.XXXXXX")"
 lan="$(jq -r '.lan_ip' "$config")"
 device="$(jq -r --arg id "$id" '.heaters[$id].device_id // empty' "$config")"
 [ -n "$device" ] || { echo configure_device_first >&2; exit 1; }
-endpoint="$("$client" discover "$lan" "$device")" || exit 1
+# Background children + wait allow TERM to interrupt discovery or a slow read.
+"$client" discover "$lan" "$device" > "$work/endpoint.json" &
+child=$!
+if wait "$child"; then child=''; else child=''; exit 1; fi
 settings() {
-  printf '%s' "$endpoint" | jq -r '.ip, .port, .public_key'
-  jq -r --arg id "$id" '.heaters[$id].token' "$config"
+ jq -r '.ip, .port, .public_key' "$work/endpoint.json"
+ jq -r --arg id "$id" '.heaters[$id].token' "$config"
 }
 if [ "$action" = read ]; then
-  settings | "$client" read
+ settings | "$client" read > "$work/result.json" &
 else
-  settings | "$client" "$action" "$value"
+ settings | "$client" "$action" "$value" > "$work/result.json" &
 fi
+child=$!
+if wait "$child"; then child=''; else child=''; exit 1; fi
+# Preserve the timestamp of an older field when a command echoes only its target.
+# This never makes an old sensor reading look newly measured.
+previous="$runtime/states/$id.json"
+[ "$(jq -r --arg id "$id" '.heaters[$id].verified // false' "$config")" = true ] || previous="$work/empty.json"
+[ -s "$previous" ] || previous="$work/empty.json"
+[ -s "$previous" ] || printf '{}\n' > "$previous"
+if jq -ce --arg id "$id" --slurpfile old "$previous" '
+ select(.encrypted_session==true) | . as $new | now as $now |
+ ($old[0] // {}) as $old |
+ reduce ["reported_target","current_temperature","device_mode"][] as $field
+ ({heater:$id,online:true,observed_at:$now,result:{encrypted_session:true},field_observed_at:{}};
+   if ($new[$field]|type)=="number" then
+    .result[$field]=$new[$field] | .field_observed_at[$field]=$now
+   elif $old.online==true and $old.heater==$id then
+    .result[$field]=$old.result[$field] |
+    .field_observed_at[$field]=($old.field_observed_at[$field] // $old.observed_at)
+   else .result[$field]=null | .field_observed_at[$field]=null end)
+ ' "$work/result.json" > "$work/state.json" 2>/dev/null; then
+ mv "$work/state.json" "$runtime/states/$id.json"
+fi
+cat "$work/result.json"

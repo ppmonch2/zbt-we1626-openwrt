@@ -91,6 +91,17 @@ class CloudLatencyTest(unittest.TestCase):
                 transport.await_acknowledgements(100.1)
         self.assertAlmostEqual(transport.preparing.join.call_args.args[0], .1)
 
+    def test_relative_action_reuses_connection_already_used_for_state_query(self):
+        transport = cloud.KeepAliveHTTPS()
+        connection = MagicMock()
+        transport.connections['storage.yandexcloud.net'] = connection
+        with patch.object(cloud.http.client, 'HTTPSConnection') as factory:
+            transport.prepare_acknowledgements(time.monotonic()+1)
+        factory.assert_not_called()
+        self.assertIsNone(transport.preparing)
+        transport.close()
+        connection.close.assert_called_once()
+
     def test_successful_authorization_reused_only_for_same_owner_token_and_ttl(self):
         with patch.object(cloud.time, 'monotonic', return_value=100) as clock, \
                 patch.object(cloud, 'owner_authorized', return_value=True) as verify:
@@ -123,9 +134,9 @@ class CloudLatencyTest(unittest.TestCase):
     def test_version_probe_has_no_cloud_or_heater_side_effects(self):
         with patch.object(skill, 'from_environment') as factory:
             result = skill.handler('{"heatbridge_diagnostic":"version"}', None)
-        self.assertEqual(result['version'], '0.1.8')
+        self.assertEqual(result['version'], skill.VERSION)
         self.assertFalse(result['heater_control'])
-        self.assertFalse(result['state_reporting'])
+        self.assertEqual(result['state_reporting'], 'auto')
         factory.assert_not_called()
 
     def test_confirmation_at_2700ms_is_accepted_but_missing_ack_is_not_success(self):

@@ -20,7 +20,15 @@ case "${1:-}" in
   echo 'Alice agent is running. End-to-end delivery still requires a test.'
   ;;
  stop)
-  if running; then kill "$pid"; fi
+  if running; then
+   kill "$pid"
+   attempts=0
+   while running; do
+    attempts=$((attempts+1))
+    [ "$attempts" -lt 35 ] || { echo 'Agent is still stopping; retry after the current network request.' >&2; exit 1; }
+    sleep 1
+   done
+  fi
   rm -f "$pidfile"
   ;;
  status) running;;

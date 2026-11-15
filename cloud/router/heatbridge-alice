@@ -8,6 +8,14 @@ config="$base/etc/heatbridge/alice.json"
 runtime="${HEATBRIDGE_ALICE_RUNTIME:-/tmp/heatbridge-alice}"
 mkdir -p "$runtime"
 chmod 700 "$runtime"
+telemetry_pid=''
+cleanup() {
+ if [ -n "$telemetry_pid" ]; then
+  kill "$telemetry_pid" 2>/dev/null || true
+  wait "$telemetry_pid" 2>/dev/null || true
+ fi
+}
+trap cleanup EXIT
 trap '' HUP
 trap 'exit 0' INT TERM
 curl -q --help all | grep -q -- '--aws-sigv4' || { echo 'curl with AWS SigV4 is required.' >&2; exit 1; }
@@ -34,6 +42,12 @@ bucket="$(jq -r .ack_bucket "$config")"
 # Curl reads the credentials from a private file, never from argv.
 jq -r '"user = \"" + .access_key + ":" + .secret_key + "\""' "$config" > "$runtime/curl.conf"
 chmod 600 "$runtime/curl.conf"
+start_telemetry() {
+ [ -x "$base/bin/heatbridge-alice-state" ] || return 0
+ if [ -n "$telemetry_pid" ] && kill -0 "$telemetry_pid" 2>/dev/null; then return 0; fi
+ "$base/bin/heatbridge-alice-state" &
+ telemetry_pid=$!
+}
 http() {
  curl -q --config "$runtime/curl.conf" --proto '=https' --connect-timeout 5 \
   --max-time 25 --max-filesize 131072 -fsS "$@" 2>/dev/null
@@ -68,6 +82,7 @@ process_message() {
      expires_at:$job[0].expires_at,ok:$ack[0].ok}' > "$runtime/delivery.json"
 }
 while :; do
+ start_telemetry
  if ! sqs ReceiveMessage --data-urlencode 'MaxNumberOfMessages=1' \
       --data-urlencode 'VisibilityTimeout=10' \
       --data-urlencode 'WaitTimeSeconds=20' > "$runtime/reply.xml"; then

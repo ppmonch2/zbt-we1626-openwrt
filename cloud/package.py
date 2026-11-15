@@ -12,14 +12,16 @@ OUT = ROOT.parent/'output-alice'
 def main():
     OUT.mkdir(exist_ok=True)
     with zipfile.ZipFile(OUT/'Ballu-Alice-Function.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
-        for name in ('skill.py', 'yandex_services.py', 'diagnostics.py'):
+        for name in ('skill.py', 'yandex_services.py', 'diagnostics.py', 'device_state.py'):
             archive.write(ROOT/'alice'/name, name)
     with tempfile.TemporaryDirectory() as tmp:
         bundle = Path(tmp)/'heatbridge-alice'
         bundle.mkdir()
         hashes = []
-        for name in ('heatbridge-alice', 'heatbridge-alice-worker', 'S85heatbridge-alice', 'install.sh'):
-            data = (ROOT/'router'/name).read_bytes()
+        for name in ('heatbridge-alice', 'heatbridge-alice-worker', 'heatbridge-alice-state',
+                     'S85heatbridge-alice', 'install.sh', 'heatbridge-device'):
+            source = ROOT.parent/'entware/bin'/name if name == 'heatbridge-device' else ROOT/'router'/name
+            data = source.read_bytes()
             path = bundle/name
             path.write_bytes(data);path.chmod(0o755)
             hashes.append(hashlib.sha256(data).hexdigest()+'  '+name)

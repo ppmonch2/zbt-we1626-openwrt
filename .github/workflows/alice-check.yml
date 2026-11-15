@@ -6,6 +6,7 @@ on:
     paths:
       - cloud/**
       - tests/test_alice*.py
+      - entware/bin/heatbridge-device
       - .github/workflows/alice-check.yml
 permissions:
   contents: read

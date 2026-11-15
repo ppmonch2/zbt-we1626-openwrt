@@ -39,7 +39,7 @@ def error_details(error):
     reason = error.args[0] if error.args else None
     if reason in ('deadline', 'cloud_http_error', 'cloud_connection_error',
                   'oversized_response', 'queue_rejected', 'invalid_queue_response',
-                  'invalid_acknowledgement'):
+                  'invalid_acknowledgement', 'invalid_state_snapshot'):
         details['reason'] = reason
     return details
 
@@ -81,7 +81,7 @@ class KeepAliveHTTPS:
         No command or HTTP request is issued by this thread. A failed warm-up
         is only an optimisation miss; the regular signed GET can still proceed.
         """
-        if self.preparing is not None:
+        if self.preparing is not None or 'storage.yandexcloud.net' in self.connections:
             return
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -216,6 +216,18 @@ class Services:
             return json.loads(data)
         except (ValueError, UnicodeError):
             raise ServiceError('invalid_acknowledgement') from None
+
+    def state_snapshot(self, deadline):
+        # One bounded GET for all devices; no bucket listing or additional roles.
+        data = self.request('GET',
+                            f'https://storage.yandexcloud.net/{self.bucket}/acks/state-v1.json',
+                            b'', 's3', deadline)
+        if data is None:
+            return None
+        try:
+            return json.loads(data)
+        except (ValueError, UnicodeError):
+            raise ServiceError('invalid_state_snapshot') from None
 
 
 def owner_authorized(authorization, owner_uid, deadline, opener=urllib.request.urlopen):

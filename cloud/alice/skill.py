@@ -5,6 +5,8 @@ import os
 import re
 import time
 
+from device_state import FLOAT, STATE_MAX_AGE, observed_state, supported
+
 from yandex_services import ServiceError, error_details, from_environment, cached_owner_authorized
 
 RANGE = 'devices.capabilities.range'
@@ -12,7 +14,7 @@ POWER = 'devices.capabilities.on_off'
 IDS = {'h1', 'h2', 'h3', 'h4'}
 # Keep 200 ms of Alice's three-second window for dispatch/serialization/network.
 RESPONSE_BUDGET = 2.8
-VERSION = '0.1.8'
+VERSION = '0.1.9'
 
 
 def failure(code, message=None):
@@ -20,7 +22,7 @@ def failure(code, message=None):
             **({'error_message': message} if message else {})}
 
 
-def command(capability):
+def command(capability, relative_target=None):
     if not isinstance(capability, dict) or not isinstance(capability.get('state'), dict):
         raise ValueError('INVALID_ACTION')
     state = capability['state']
@@ -30,7 +32,14 @@ def command(capability):
         return 'mode', int(state['value'])
     if capability.get('type') == RANGE and state.get('instance') == 'temperature':
         value = state.get('value')
-        if state.get('relative', False) is not False:
+        relative = state.get('relative', False)
+        if relative is True:
+            if relative_target is None:
+                raise ValueError('INVALID_ACTION')
+            if type(value) not in (int, float) or not -30 <= value <= 30 or int(value) != value:
+                raise ValueError('INVALID_VALUE')
+            value += relative_target
+        elif relative is not False:
             raise ValueError('INVALID_ACTION')
         if type(value) not in (int, float) or not 5 <= value <= 30 or int(value) != value:
             raise ValueError('INVALID_VALUE')
@@ -52,14 +61,17 @@ def confirmed(ack, job):
     return type(result.get(field)) in (int, float) and result[field] == job['value']
 
 
-def catalog(names):
+def catalog(names, state_available=False):
     return [{'id': key, 'name': name, 'type': 'devices.types.thermostat',
              'description': 'Локальный Ballu через роутер, без HOMMYN',
              'capabilities': [
-                 {'type': POWER, 'retrievable': False, 'reportable': False},
-                 {'type': RANGE, 'retrievable': False, 'reportable': False,
+                 {'type': POWER, 'retrievable': state_available, 'reportable': False},
+                 {'type': RANGE, 'retrievable': state_available, 'reportable': False,
                   'parameters': {'instance': 'temperature', 'unit': 'unit.temperature.celsius',
-                                 'random_access': True, 'range': {'min': 5, 'max': 30, 'precision': 1}}}]}
+                                 'random_access': True, 'range': {'min': 5, 'max': 30, 'precision': 1}}}],
+             **({'properties': [{'type': FLOAT, 'retrievable': True, 'reportable': False,
+                  'parameters': {'instance': 'temperature', 'unit': 'unit.temperature.celsius'}}]}
+                if state_available else {})}
             for key, name in names.items()]
 
 
@@ -82,8 +94,21 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
         return {**response, 'payload': {'error_code': 'ACCOUNT_LINKING_ERROR'}}
     trace('authorized')
     kind = event.get('request_type')
+    snapshot, state_error = None, False
+    snapshot_loaded = kind in ('discovery', 'query')
+    if kind in ('discovery', 'query'):
+        try:
+            reader = getattr(services, 'state_snapshot', None)
+            snapshot = reader(deadline) if reader else None
+            state_error = snapshot is not None and not supported(snapshot)
+        except ServiceError as exc:
+            state_error = True
+            trace('state_read_failed', **error_details(exc))
     if kind == 'discovery':
-        return {**response, 'payload': {'user_id': owner_uid, 'devices': catalog(names)}}
+        if state_error:
+            return {**response, 'payload': {'error_code': 'INTERNAL_ERROR'}}
+        return {**response, 'payload': {'user_id': owner_uid,
+                'devices': catalog(names, supported(snapshot))}}
     if kind == 'unlink':
         return response
     payload = event.get('payload')
@@ -102,11 +127,19 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
                 'DEVICE_NOT_FOUND' if kind == 'query' else failure('DEVICE_NOT_FOUND'))
             continue
         if kind == 'query':
-            # All advertised capabilities are retrievable:false. Yandex allows
-            # omitting them; returning a device error falsely marks a refresh as failed.
-            # Do not invent measured state or infer current connectivity from a past ACK.
-            entry['capabilities'] = []
-            trace('query_without_retrievable_state')
+            if snapshot is None and not state_error:
+                # Cloud can be installed first, while the old router has no
+                # publisher. Discovery still advertises retrievable:false.
+                entry['capabilities'] = []
+                trace('router_state_publisher_not_installed')
+            else:
+                state = observed_state(snapshot, heater)
+                if state is None:
+                    entry['error_code'] = 'DEVICE_UNREACHABLE'
+                    trace('state_missing_stale_or_invalid', heater=heater)
+                else:
+                    entry.update(state)
+                    trace('state_returned', heater=heater)
             continue
         capabilities = device.get('capabilities')
         if (not isinstance(capabilities, list) or not 1 <= len(capabilities) <= 2 or
@@ -121,7 +154,22 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
                       'action_result': failure('DEVICE_UNREACHABLE', 'No timely heater confirmation; the command may have been applied.')}}
             entry['capabilities'].append(result)
             try:
-                action, value = command(capability)
+                relative_target = None
+                if (capability.get('type') == RANGE and isinstance(state, dict) and
+                        state.get('instance') == 'temperature' and state.get('relative') is True):
+                    reader = getattr(services, 'state_snapshot', None)
+                    if reader:
+                        if not snapshot_loaded:
+                            snapshot_loaded = True
+                            try:
+                                snapshot = reader(deadline)
+                            except ServiceError:
+                                snapshot = None
+                        measured = observed_state(snapshot, heater)
+                        if measured is None:
+                            raise ValueError('DEVICE_UNREACHABLE')
+                        relative_target = measured['capabilities'][1]['state']['value']
+                action, value = command(capability, relative_target)
             except ValueError as exc:
                 result['state']['action_result'] = failure(str(exc))
                 continue
@@ -184,7 +232,8 @@ def handler(event, context):
         return {'version': VERSION, 'heater_control': False,
                 'parallel_ack_connection': True, 'owner_check_cache_seconds': 30,
                 'response_budget_seconds': RESPONSE_BUDGET,
-                'state_reporting': False, 'router_update_required': False}
+                'state_reporting': 'auto', 'state_max_age_seconds': STATE_MAX_AGE,
+                'state_router_min_version': '0.1.3'}
     # This exact console-only envelope cannot supply a live job or credentials.
     # expires_at=0 ensures the router rejects the probe before hardware access.
     if event == {'heatbridge_diagnostic': 'expired_queue_probe'}:
