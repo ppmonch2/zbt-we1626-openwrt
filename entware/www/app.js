@@ -52,8 +52,8 @@ function render(){
   }
   card.append(node('p',description,'state'));
   card.append(button('Проверить состояние',()=>operate(h.id,'probe'),!h.configured,true));
-  const controls=node('div',null,'controls'),temp=node('input');temp.type='number';temp.min='5';temp.max='30';temp.step='1';temp.value=s?.reported_target??h.temp??18;temp.setAttribute('aria-label','Уставка температуры');temp.disabled=busy||!h.verified;
-  controls.append(temp,node('span','°C'),button('Задать',()=>{const value=Number(temp.value);if(!Number.isInteger(value)||value<5||value>30){status.textContent='Допустимы целые температуры 5–30 °C.';return;}operate(h.id,'set',value);},!h.verified));card.append(controls);
+  const controls=node('div',null,'controls'),temp=node('input');temp.type='number';temp.min='10';temp.max='35';temp.step='1';temp.value=s?.reported_target??h.temp??18;temp.setAttribute('aria-label','Уставка температуры');temp.disabled=busy||!h.verified;
+  controls.append(temp,node('span','°C'),button('Задать',()=>{const value=Number(temp.value);if(!Number.isInteger(value)||value<10||value>35){status.textContent='Допустимы целые температуры 10–35 °C.';return;}operate(h.id,'set',value);},!h.verified));card.append(controls);
   const power=node('div',null,'controls');power.append(button('Включить · Комфорт',()=>operate(h.id,'mode',1),!h.verified,true),button('Выключить',()=>operate(h.id,'mode',0),!h.verified,true));card.append(power);
   const details=node('details');details.append(node('summary',h.configured?'Заменить привязку':'Подключить обогреватель'));
   const name=node('input');name.type='text';name.maxLength=32;name.value=h.name;name.id='name-'+h.id;
