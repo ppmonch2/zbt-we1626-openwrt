@@ -12,7 +12,7 @@ OUT = ROOT.parent/'output-alice'
 def main():
     OUT.mkdir(exist_ok=True)
     with zipfile.ZipFile(OUT/'Ballu-Alice-Function.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
-        for name in ('skill.py', 'yandex_services.py', 'diagnostics.py', 'device_state.py', 'disk_services.py'):
+        for name in ('skill.py', 'yandex_services.py', 'diagnostics.py', 'device_state.py', 'disk_services.py', 'notify.py'):
             archive.write(ROOT/'alice'/name, name)
     # The installed native client previously refused temperatures above 30 C.
     # Refuse to ship an incomplete router update that would still reject 31-35 C.
