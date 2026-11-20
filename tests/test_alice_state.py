@@ -337,9 +337,9 @@ print(json.dumps({'ok':True,'encrypted_session':True,'command_acknowledged':acti
         # A real set call immediately updates the verified local state file.
         self.assertEqual(self.call('read', 'h2').returncode, 0)
         script = '''curl() {
- cp "$HEATBRIDGE_ALICE_RUNTIME/telemetry/upload.json" "$HEATBRIDGE_PREFIX/uploaded.json"
+ cp "$HEATBRIDGE_ALICE_RUNTIME/telemetry/upload.json" "$HEATBRIDGE_PREFIX/uploaded.tmp"\n mv "$HEATBRIDGE_PREFIX/uploaded.tmp" "$HEATBRIDGE_PREFIX/uploaded.json"
 }
-. "''' + str(ROOT/'cloud/router/heatbridge-alice-state') + '"\\n'
+. "''' + str(ROOT/'cloud/router/heatbridge-alice-state') + '"\n'
         worker = subprocess.Popen(['sh', '-c', script], env=self.env,
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
