@@ -139,6 +139,9 @@ class DiskCloudTest(unittest.TestCase):
         self.assertEqual(result['status'], 'ERROR')
         self.assertEqual(result['phase'], 'read')
         self.assertEqual(result['reason'], 'cloud_connection_error')
+        self.assertEqual(result['network_stage'], 'response')
+        self.assertEqual(result['network_kind'], 'TimeoutError')
+        self.assertGreaterEqual(result['elapsed_ms'], 0)
         self.assertNotIn('fixture-password', json.dumps(result))
 
     def test_environment_selects_disk_without_aws_credentials(self):
