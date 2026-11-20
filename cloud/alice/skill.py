@@ -348,8 +348,8 @@ def handler(event, context):
                 if not re.fullmatch(r'[A-Za-z0-9_-]{6,128}',
                                     os.environ.get('HEATBRIDGE_DIALOGS_SKILL_ID', '')):
                     raise ValueError('Missing Dialogs skill ID')
-                if not re.fullmatch(r'[^\\s]{16,2048}',
-                                    os.environ.get('HEATBRIDGE_DIALOGS_OAUTH_TOKEN', '')):
+                dialogs_token = os.environ.get('HEATBRIDGE_DIALOGS_OAUTH_TOKEN', '')
+                if not 16 <= len(dialogs_token) <= 2048 or any(c.isspace() for c in dialogs_token):
                     raise ValueError('Missing Dialogs OAuth token')
             return process(event, names, owner, services)
         finally:
