@@ -1,0 +1,32 @@
+name: Ballu Alice cloud-only package
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/heater-live-status-and-scenes
+    paths:
+      - cloud/alice/**
+      - tests/test_alice*.py
+      - .github/workflows/alice-cloud-only.yml
+permissions:
+  contents: read
+jobs:
+  test-and-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test cloud and Disk protocol
+        run: python3 -m unittest discover -s tests -p 'test_alice*.py' -v
+      - name: Package Cloud Function only
+        run: |
+          mkdir -p output-cloud
+          cd cloud/alice
+          zip -q -j ../../output-cloud/Ballu-Alice-Function.zip skill.py yandex_services.py diagnostics.py device_state.py disk_services.py
+          unzip -t ../../output-cloud/Ballu-Alice-Function.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ballu-Alice-Cloud-Only
+          path: output-cloud/Ballu-Alice-Function.zip
+          retention-days: 7
+          if-no-files-found: error
