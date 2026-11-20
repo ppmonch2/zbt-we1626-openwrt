@@ -266,7 +266,10 @@ def handler(event, context):
         except (KeyError, ValueError, TypeError):
             return {'diagnostic': 'disk_probe', 'heater_control': False, 'status': 'INVALID_CONFIGURATION'}
         except ServiceError as exc:
-            return {'diagnostic': 'disk_probe', 'heater_control': False, 'status': 'ERROR', **error_details(exc)}
+            return {'diagnostic': 'disk_probe', 'heater_control': False, 'status': 'ERROR',
+                    **error_details(exc),
+                    **({'phase': exc.probe_phase} if getattr(exc, 'probe_phase', None) in
+                       ('write', 'read', 'delete') else {})}
         finally:
             if services:
                 services.close()
