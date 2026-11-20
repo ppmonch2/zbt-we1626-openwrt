@@ -109,13 +109,32 @@ class DiskCloudTest(unittest.TestCase):
             target.write_text(content)
             with self.assertRaises(ServiceError): self.client.acknowledgements(time.monotonic()+1)
 
-    def test_probe_only_writes_reads_deletes_probe_folder(self):
+    def test_probe_validates_write_and_read_without_unnecessary_delete(self):
         result = self.client.probe(time.monotonic()+2)
-        self.assertTrue(result['write_read_delete'])
+        self.assertEqual(result['status'], 'OK')
+        self.assertTrue(result['write_read'])
         self.assertFalse(result['heater_control'])
-        self.assertEqual([call[0] for call in self.connection.calls], ['PUT', 'GET', 'DELETE'])
-        self.assertTrue(all('/probes/' in call[1] for call in self.connection.calls))
-        self.assertEqual(list((self.root/'heatbridge-v1/probes').iterdir()), [])
+        self.assertEqual([call[0] for call in self.connection.calls], ['PUT', 'GET'])
+        self.assertTrue(all('/probes/cloud-check.json' in call[1] for call in self.connection.calls))
+        probe_file = self.root/'heatbridge-v1/probes/cloud-check.json'
+        original_nonce = json.loads(probe_file.read_text())['probe']
+        self.client.probe(time.monotonic()+2)
+        self.assertNotEqual(json.loads(probe_file.read_text())['probe'], original_nonce)
+        self.assertEqual(len(list((self.root/'heatbridge-v1/probes').iterdir())), 1)
+
+    def test_probe_succeeds_even_if_webdav_delete_is_unavailable(self):
+        class DeleteUnavailable(FileConnection):
+            def getresponse(self):
+                if self.last[0] == 'DELETE':
+                    raise TimeoutError('delete is slow')
+                return super().getresponse()
+        client = DiskServices('fixture-user', 'fixture-password',
+                              connection=DeleteUnavailable(self.root))
+        with patch('skill.from_environment', return_value=client):
+            result = skill.handler({'heatbridge_diagnostic': 'disk_probe'}, None)
+        self.assertEqual(result['status'], 'OK')
+        self.assertTrue(result['write_read'])
+        self.assertEqual([call[0] for call in client.connection.calls], ['PUT', 'GET'])
 
     def test_probe_diagnostic_identifies_write_or_read_failure(self):
         self.connection.forced_status = 403
