@@ -82,8 +82,8 @@ class DiskServices:
             error.elapsed_ms = round((time.monotonic() - started) * 1000)
             raise error from None
 
-    def read_json(self, path, deadline):
-        data = self.request('GET', path, deadline, missing=True)
+    def read_json(self, path, deadline, timeout_cap=1.35):
+        data = self.request('GET', path, deadline, missing=True, timeout_cap=timeout_cap)
         if data is None:
             return None
         try:
@@ -120,7 +120,13 @@ class DiskServices:
         return self.acknowledgements(deadline).get(job_id)
 
     def state_snapshot(self, deadline):
-        return self.read_json('/acks/state-v1.json', deadline)
+        # Queries have only one WebDAV GET. Allow a slower but legitimate
+        # response without changing the short polls used for action ACKs.
+        remaining = deadline - time.monotonic() - .15
+        if remaining <= 0:
+            raise ServiceError('deadline', service='webdav')
+        return self.read_json('/acks/state-v1.json', deadline,
+                              timeout_cap=min(2.3, remaining))
 
     def probe(self, deadline):
         """Exercise exactly the PUT+GET path used by live commands and status.
