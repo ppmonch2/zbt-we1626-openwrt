@@ -123,8 +123,14 @@ class DiskServices:
         return self.read_json('/acks/state-v1.json', deadline)
 
     def probe(self, deadline):
-        """Write/read/delete a nonce in a folder the router never executes."""
-        path = '/probes/' + uuid.uuid4().hex + '.json'
+        """Exercise exactly the PUT+GET path used by live commands and status.
+
+        A DELETE is not required for command delivery. WebDAV deletion may block
+        well beyond Alice's three-second window, causing a false failed probe.
+        Reuse one inert probe document, overwriting a fresh nonce each time so
+        diagnostics never accumulate objects or touch any executable commands.
+        """
+        path = '/probes/cloud-check.json'
         body = json.dumps({'probe': uuid.uuid4().hex}).encode()
         phase = 'write'
         try:
@@ -132,10 +138,8 @@ class DiskServices:
             phase = 'read'
             if self.request('GET', path, deadline) != body:
                 raise ServiceError('invalid_probe_response', service='webdav')
-            phase = 'delete'
-            self.request('DELETE', path, deadline, missing=True)
         except ServiceError as exc:
             # Report only the safe operation name; never expose credentials or paths.
             exc.probe_phase = phase
             raise
-        return {'status': 'OK', 'write_read_delete': True, 'heater_control': False}
+        return {'status': 'OK', 'write_read': True, 'heater_control': False}
