@@ -262,14 +262,19 @@ def handler(event, context):
             services = from_environment()
             if getattr(services, 'transport', None) != 'disk':
                 return {'diagnostic': 'disk_probe', 'heater_control': False, 'status': 'SELECT_DISK_TRANSPORT'}
-            return {'diagnostic': 'disk_probe', **services.probe(time.monotonic() + 2.5)}
+            return {'diagnostic': 'disk_probe', **services.probe(time.monotonic() + 2.8)}
         except (KeyError, ValueError, TypeError):
             return {'diagnostic': 'disk_probe', 'heater_control': False, 'status': 'INVALID_CONFIGURATION'}
         except ServiceError as exc:
             return {'diagnostic': 'disk_probe', 'heater_control': False, 'status': 'ERROR',
                     **error_details(exc),
                     **({'phase': exc.probe_phase} if getattr(exc, 'probe_phase', None) in
-                       ('write', 'read', 'delete') else {})}
+                       ('write', 'read', 'delete') else {}),
+                    **({'network_stage': exc.network_stage}
+                       if getattr(exc, 'network_stage', None) in
+                       ('connect', 'send', 'response', 'body') else {}),
+                    **({'network_kind': exc.network_kind, 'elapsed_ms': exc.elapsed_ms}
+                       if getattr(exc, 'network_kind', None) is not None else {})}
         finally:
             if services:
                 services.close()
