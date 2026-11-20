@@ -117,6 +117,30 @@ class DiskCloudTest(unittest.TestCase):
         self.assertTrue(all('/probes/' in call[1] for call in self.connection.calls))
         self.assertEqual(list((self.root/'heatbridge-v1/probes').iterdir()), [])
 
+    def test_probe_diagnostic_identifies_write_or_read_failure(self):
+        self.connection.forced_status = 403
+        with patch('skill.from_environment', return_value=self.client):
+            result = skill.handler({'heatbridge_diagnostic': 'disk_probe'}, None)
+        self.assertEqual(result['status'], 'ERROR')
+        self.assertEqual(result['phase'], 'write')
+        self.assertEqual(result['http_status'], 403)
+        self.assertNotIn('fixture-password', json.dumps(result))
+
+        class TimeoutOnRead(FileConnection):
+            def getresponse(self):
+                if self.last[0] == 'GET':
+                    raise TimeoutError('simulated WebDAV timeout')
+                return super().getresponse()
+
+        client = DiskServices('fixture-user', 'fixture-password',
+                              connection=TimeoutOnRead(self.root))
+        with patch('skill.from_environment', return_value=client):
+            result = skill.handler({'heatbridge_diagnostic': 'disk_probe'}, None)
+        self.assertEqual(result['status'], 'ERROR')
+        self.assertEqual(result['phase'], 'read')
+        self.assertEqual(result['reason'], 'cloud_connection_error')
+        self.assertNotIn('fixture-password', json.dumps(result))
+
     def test_environment_selects_disk_without_aws_credentials(self):
         with patch.dict(os.environ, {'HEATBRIDGE_TRANSPORT': 'disk',
                 'HEATBRIDGE_DISK_LOGIN': 'owner', 'HEATBRIDGE_DISK_APP_PASSWORD': 'fixture-password'}, clear=True):
