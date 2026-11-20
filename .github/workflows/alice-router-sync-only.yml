@@ -1,0 +1,41 @@
+name: Ballu Alice fast state-sync patch
+on:
+  push:
+    branches:
+      - feature/heater-live-status-and-scenes
+    paths:
+      - cloud/router/heatbridge-alice-state
+      - cloud/router/heatbridge-disk-agent
+      - cloud/router/quick-sync-install.sh
+      - tests/test_alice*.py
+      - .github/workflows/alice-router-sync-only.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test-and-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate scripts and test disk protocol
+        run: |
+          sh -n cloud/router/heatbridge-alice-state
+          sh -n cloud/router/heatbridge-disk-agent
+          sh -n cloud/router/quick-sync-install.sh
+          python3 -m unittest discover -s tests -p 'test_alice*.py' -v
+      - name: Package two-script router patch
+        run: |
+          mkdir -p output-fast stage-fast
+          cp cloud/router/heatbridge-alice-state cloud/router/heatbridge-disk-agent cloud/router/quick-sync-install.sh stage-fast/
+          cd stage-fast
+          sha256sum heatbridge-alice-state heatbridge-disk-agent > SHA256SUMS
+          zip -q ../output-fast/Ballu-Alice-Fast-Sync.zip heatbridge-alice-state heatbridge-disk-agent quick-sync-install.sh SHA256SUMS
+          cd ..
+          unzip -t output-fast/Ballu-Alice-Fast-Sync.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ballu-Alice-Fast-Sync
+          path: output-fast/Ballu-Alice-Fast-Sync.zip
+          retention-days: 7
+          if-no-files-found: error
