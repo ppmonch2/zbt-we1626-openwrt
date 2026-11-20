@@ -128,13 +128,13 @@ class DiskCloudTest(unittest.TestCase):
                 if self.last[0] == 'DELETE':
                     raise TimeoutError('delete is slow')
                 return super().getresponse()
-        client = DiskServices('fixture-user', 'fixture-password',
-                              connection=DeleteUnavailable(self.root))
+        connection = DeleteUnavailable(self.root)
+        client = DiskServices('fixture-user', 'fixture-password', connection=connection)
         with patch('skill.from_environment', return_value=client):
             result = skill.handler({'heatbridge_diagnostic': 'disk_probe'}, None)
         self.assertEqual(result['status'], 'OK')
         self.assertTrue(result['write_read'])
-        self.assertEqual([call[0] for call in client.connection.calls], ['PUT', 'GET'])
+        self.assertEqual([call[0] for call in connection.calls], ['PUT', 'GET'])
 
     def test_probe_diagnostic_identifies_write_or_read_failure(self):
         self.connection.forced_status = 403
