@@ -61,15 +61,15 @@ def confirmed(ack, job):
     return type(result.get(field)) in (int, float) and result[field] == job['value']
 
 
-def catalog(names, state_available=False):
+def catalog(names, state_available=False, push=False):
     return [{'id': key, 'name': name, 'type': 'devices.types.thermostat',
              'description': 'Локальный Ballu через роутер, без HOMMYN',
              'capabilities': [
-                 {'type': POWER, 'retrievable': state_available, 'reportable': False},
-                 {'type': RANGE, 'retrievable': state_available, 'reportable': False,
+                 {'type': POWER, 'retrievable': state_available and not push, 'reportable': push},
+                 {'type': RANGE, 'retrievable': state_available and not push, 'reportable': push,
                   'parameters': {'instance': 'temperature', 'unit': 'unit.temperature.celsius',
                                  'random_access': True, 'range': {'min': 10, 'max': 35, 'precision': 1}}}],
-             **({'properties': [{'type': FLOAT, 'retrievable': True, 'reportable': False,
+             **({'properties': [{'type': FLOAT, 'retrievable': not push, 'reportable': push,
                   'parameters': {'instance': 'temperature', 'unit': 'unit.temperature.celsius'}}]}
                 if state_available else {})}
             for key, name in names.items()]
@@ -96,6 +96,7 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
     kind = event.get('request_type')
     disk_transport = getattr(services, 'transport', None) == 'disk'
     async_disk = (disk_transport and os.environ.get('HEATBRIDGE_ASYNC_ACTIONS') == '1')
+    push_state = (disk_transport and os.environ.get('HEATBRIDGE_PUSH_STATE') == '1')
     snapshot, state_error = None, False
     snapshot_loaded = kind in ('discovery', 'query')
     # Device discovery describes capabilities, not current reachability.
@@ -104,7 +105,7 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
     if kind == 'discovery' and disk_transport:
         trace('disk_discovery_without_state_dependency')
         return {**response, 'payload': {'user_id': owner_uid,
-                'devices': catalog(names, True)}}
+                'devices': catalog(names, True, push_state)}}
     if kind in ('discovery', 'query'):
         try:
             reader = getattr(services, 'state_snapshot', None)
@@ -117,7 +118,7 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
         if state_error:
             return {**response, 'payload': {'error_code': 'INTERNAL_ERROR'}}
         return {**response, 'payload': {'user_id': owner_uid,
-                'devices': catalog(names, supported(snapshot))}}
+                'devices': catalog(names, supported(snapshot), push_state)}}
     if kind == 'unlink':
         return response
     payload = event.get('payload')
@@ -200,10 +201,21 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
             batch_submit([job for job, result in pending], deadline)
             trace('disk_batch_submitted', commands=len(pending), batch_id=getattr(services, 'batch', None))
             if async_disk and time.monotonic() < deadline:
-                # Yandex officially supports accepting asynchronous actions.
-                # DONE here means the command is durably queued, NOT that the
-                # heater already executed it. A separate timed Cloud Function
-                # must send /callback/state using verified router observations.
+                # A separate, private Cloud Function watches only the verified
+                # ACK on Disk. This is best effort; periodic notifications remain
+                # a recovery fallback. No router-to-cloud HTTPS is required.
+                if push_state:
+                    try:
+                        from fast_push import invoke
+                        dispatched = invoke(getattr(services, 'batch', ''),
+                                            [job for job, _ in pending],
+                                            os.environ.get('HEATBRIDGE_FAST_NOTIFY_FUNCTION_ID', ''),
+                                            deadline)
+                        trace('fast_notify_accepted' if dispatched else 'fast_notify_not_accepted')
+                    except (ValueError, KeyError, OSError, TypeError):
+                        trace('fast_notify_unavailable')
+                # DONE acknowledges a durable mailbox write, never heater execution.
+                # Real state must be delivered via confirmed callback.
                 for job, result in pending:
                     result['state']['action_result'] = {'status': 'DONE'}
                 trace('disk_async_queued_for_callback', commands=len(pending))
@@ -273,6 +285,8 @@ def handler(event, context):
                 'parallel_ack_connection': not disk_transport, 'owner_check_cache_seconds': 30,
                 'response_budget_seconds': RESPONSE_BUDGET,
                 'state_reporting': 'auto', 'state_max_age_seconds': STATE_MAX_AGE,
+                'push_state': (disk_transport and os.environ.get('HEATBRIDGE_PUSH_STATE') == '1'),
+                'fast_push_configured': bool(os.environ.get('HEATBRIDGE_FAST_NOTIFY_FUNCTION_ID')),
                 'state_router_min_version': '0.2.0' if disk_transport else '0.1.3'}
     if event == {'heatbridge_diagnostic': 'disk_probe'}:
         services = None
@@ -340,6 +354,13 @@ def handler(event, context):
                 print(json.dumps({'request_id': identity}))
         services = from_environment()
         try:
+            if os.environ.get('HEATBRIDGE_PUSH_STATE') == '1':
+                # Never disable Yandex query before private callback delivery is configured.
+                if getattr(services, 'transport', None) != 'disk' or os.environ.get('HEATBRIDGE_ASYNC_ACTIONS') != '1':
+                    raise ValueError('Push requires Disk and async callbacks')
+                if not re.fullmatch(r'[A-Za-z0-9_-]{6,128}',
+                                    os.environ.get('HEATBRIDGE_FAST_NOTIFY_FUNCTION_ID', '')):
+                    raise ValueError('Missing private notifier ID')
             if os.environ.get('HEATBRIDGE_ASYNC_ACTIONS') == '1':
                 # Never claim async success unless the notification publisher
                 # has been explicitly configured (and its timer activated).
