@@ -61,18 +61,72 @@ def confirmed(ack, job):
     return type(result.get(field)) in (int, float) and result[field] == job['value']
 
 
-def catalog(names, state_available=False, push=False):
+def catalog(names, state_available=False, push=False, hybrid=False):
     return [{'id': key, 'name': name, 'type': 'devices.types.thermostat',
              'description': 'Локальный Ballu через роутер, без HOMMYN',
              'capabilities': [
-                 {'type': POWER, 'retrievable': state_available and not push, 'reportable': push},
+                 {'type': POWER, 'retrievable': state_available and not push, 'reportable': push or hybrid},
                  {'type': RANGE, 'retrievable': state_available and not push, 'reportable': push,
                   'parameters': {'instance': 'temperature', 'unit': 'unit.temperature.celsius',
                                  'random_access': True, 'range': {'min': 10, 'max': 35, 'precision': 1}}}],
-             **({'properties': [{'type': FLOAT, 'retrievable': not push, 'reportable': push,
+             **({'properties': [{'type': FLOAT, 'retrievable': not push, 'reportable': push or hybrid,
                   'parameters': {'instance': 'temperature', 'unit': 'unit.temperature.celsius'}}]}
                 if state_available else {})}
             for key, name in names.items()]
+
+
+
+def recent_confirmed_overlay(snapshot, heater, state, services, deadline):
+    """Keep query retrievable, but never replace a newer confirmed callback
+    with the router publisher's older value. The ledger only contains state
+    accepted by Alice callback/202, not queued requests or optimistic intents.
+    A missing ledger leaves the original router observation unchanged.
+    """
+    if not isinstance(state, dict) or not supported(snapshot):
+        return state
+    try:
+        remaining = deadline - time.monotonic() - .10
+        if remaining <= .15:
+            return state
+        ledger = services.read_json('/probes/alice-push-ledger.json',
+                                    deadline, timeout_cap=min(.9, remaining))
+    except (ServiceError, OSError, AttributeError, ValueError):
+        return state
+    if not isinstance(ledger, dict) or ledger.get('schema') != 2:
+        return state
+    fields = (ledger.get('devices') or {}).get(heater)
+    local = snapshot['devices'].get(heater)
+    if not isinstance(fields, dict) or not isinstance(local, dict):
+        return state
+    local_stamps = local.get('field_observed_at') or {}
+    if not isinstance(local_stamps, dict):
+        local_stamps = {}
+    now = time.time()
+    for field, key, cap_type in (
+        ('target', 'reported_target', RANGE),
+        ('power', 'device_mode', POWER),
+    ):
+        record = fields.get(field)
+        if not isinstance(record, dict):
+            continue
+        ts = record.get('ts')
+        if (type(ts) not in (float, int) or
+                not now - 90 <= ts <= now + 5):
+            continue
+        oldstamp = local_stamps.get(key, local.get('observed_at', 0))
+        if type(oldstamp) not in (float, int) or ts <= oldstamp:
+            continue
+        value = record.get('value')
+        if field == 'target':
+            if type(value) is not int or not 10 <= value <= 35:
+                continue
+        elif type(value) is not bool:
+            continue
+        for cap in state.get('capabilities', []):
+            if cap.get('type') == cap_type:
+                cap['state']['value'] = value
+                break
+    return state
 
 
 def process(event, names, owner_uid, services, authorize=cached_owner_authorized):
@@ -97,6 +151,7 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
     disk_transport = getattr(services, 'transport', None) == 'disk'
     async_disk = (disk_transport and os.environ.get('HEATBRIDGE_ASYNC_ACTIONS') == '1')
     push_state = (disk_transport and os.environ.get('HEATBRIDGE_PUSH_STATE') == '1')
+    hybrid_state = (disk_transport and os.environ.get('HEATBRIDGE_HYBRID_STATE') == '1')
     snapshot, state_error = None, False
     snapshot_loaded = kind in ('discovery', 'query')
     # Device discovery describes capabilities, not current reachability.
@@ -105,7 +160,7 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
     if kind == 'discovery' and disk_transport:
         trace('disk_discovery_without_state_dependency')
         return {**response, 'payload': {'user_id': owner_uid,
-                'devices': catalog(names, True, push_state)}}
+                'devices': catalog(names, True, push_state, hybrid_state)}}
     if kind in ('discovery', 'query'):
         try:
             reader = getattr(services, 'state_snapshot', None)
@@ -118,7 +173,7 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
         if state_error:
             return {**response, 'payload': {'error_code': 'INTERNAL_ERROR'}}
         return {**response, 'payload': {'user_id': owner_uid,
-                'devices': catalog(names, supported(snapshot), push_state)}}
+                'devices': catalog(names, supported(snapshot), push_state, hybrid_state)}}
     if kind == 'unlink':
         return response
     payload = event.get('payload')
@@ -149,6 +204,9 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
                     entry['error_code'] = 'DEVICE_UNREACHABLE'
                     trace('state_missing_stale_or_invalid', heater=heater)
                 else:
+                    if hybrid_state:
+                        state = recent_confirmed_overlay(snapshot, heater, state,
+                                                         services, deadline)
                     entry.update(state)
                     trace('state_returned', heater=heater)
             continue
@@ -204,7 +262,7 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
                 # A separate, private Cloud Function watches only the verified
                 # ACK on Disk. This is best effort; periodic notifications remain
                 # a recovery fallback. No router-to-cloud HTTPS is required.
-                if push_state:
+                if push_state or hybrid_state:
                     try:
                         from fast_push import invoke
                         dispatched = invoke(getattr(services, 'batch', ''),
@@ -286,6 +344,7 @@ def handler(event, context):
                 'response_budget_seconds': RESPONSE_BUDGET,
                 'state_reporting': 'auto', 'state_max_age_seconds': STATE_MAX_AGE,
                 'push_state': (disk_transport and os.environ.get('HEATBRIDGE_PUSH_STATE') == '1'),
+                'hybrid_state': (disk_transport and os.environ.get('HEATBRIDGE_HYBRID_STATE') == '1'),
                 'fast_push_configured': bool(os.environ.get('HEATBRIDGE_FAST_NOTIFY_FUNCTION_ID')),
                 'state_router_min_version': '0.2.0' if disk_transport else '0.1.3'}
     if event == {'heatbridge_diagnostic': 'disk_probe'}:
@@ -354,7 +413,9 @@ def handler(event, context):
                 print(json.dumps({'request_id': identity}))
         services = from_environment()
         try:
-            if os.environ.get('HEATBRIDGE_PUSH_STATE') == '1':
+            if os.environ.get('HEATBRIDGE_HYBRID_STATE') == '1' and os.environ.get('HEATBRIDGE_PUSH_STATE') == '1':
+                raise ValueError('Cannot select both push-only and hybrid')
+            if os.environ.get('HEATBRIDGE_PUSH_STATE') == '1' or os.environ.get('HEATBRIDGE_HYBRID_STATE') == '1':
                 # Never disable Yandex query before private callback delivery is configured.
                 if getattr(services, 'transport', None) != 'disk' or os.environ.get('HEATBRIDGE_ASYNC_ACTIONS') != '1':
                     raise ValueError('Push requires Disk and async callbacks')
