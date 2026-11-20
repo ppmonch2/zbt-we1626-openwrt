@@ -125,5 +125,63 @@ class PushTests(unittest.TestCase):
         schedule.assert_called_once()
 
 
+    def test_hybrid_discovery_keeps_all_thermostat_fields_visible(self):
+        observed = skill.catalog({'h2': 'Мансарда'}, True, push=False, hybrid=True)[0]
+        self.assertEqual(len(observed['capabilities']), 2)
+        self.assertEqual(len(observed['properties']), 1)
+        self.assertTrue(all(x['retrievable'] and x['reportable']
+                            for x in observed['capabilities'] + observed['properties']))
+
+    def test_stale_query_is_corrected_by_newer_verified_callback(self):
+        from test_alice import event
+        old = snapshot(target=28, measured=19.5)
+        old['observed_at'] -= 3
+        old['field_observed_at']['reported_target'] -= 3
+        bundle = {'schema': 1, 'devices': {'h2': old}}
+        now = time.time()
+        # Confirmed values were sent to Dialogs; no optimistic command value.
+        self.assertEqual(notify.push_changes(CONFIG, self.services,
+                         {'h2': {'target': (27, now)}}, self.cb)['status'], 'OK')
+
+        class Reader:
+            transport = 'disk'
+            def state_snapshot(self, deadline): return bundle
+            def read_json(self, path, deadline, timeout_cap=1.35):
+                return client.read_json(path, deadline, timeout_cap)
+        client = self.services
+        req = event()
+        req['request_type'] = 'query'
+        req['payload']['devices'] = [{'id': 'h2'}]
+        with patch.dict(os.environ, {**CONFIG, 'HEATBRIDGE_PUSH_STATE': '0',
+                                      'HEATBRIDGE_HYBRID_STATE': '1'}):
+            data = skill.process(req, {'h2':'Мансарда'}, '123', Reader(),
+                                 authorize=lambda *args: True)
+        state = data['payload']['devices'][0]
+        self.assertEqual(state['capabilities'][1]['state']['value'], 27,
+                         'Old router snapshot must not undo 202-accepted callback')
+        self.assertEqual(state['properties'][0]['state']['value'], 19.5)
+        self.assertEqual(state['capabilities'][0]['state']['value'], True)
+
+    def test_unverified_queued_request_never_changes_query_value(self):
+        old = snapshot(target=28, measured=19.5)
+        bundle = {'schema':1, 'devices': {'h2': old}}
+        state = skill.observed_state(bundle, 'h2')
+        actual = skill.recent_confirmed_overlay(bundle, 'h2', state,
+                                                self.services, time.monotonic()+1.5)
+        self.assertEqual(actual['capabilities'][1]['state']['value'], 28)
+
+    def test_stale_callback_ledger_is_not_used_against_newer_heater_read(self):
+        now = time.time()
+        self.assertEqual(notify.push_changes(CONFIG, self.services,
+                         {'h2': {'target': (27, now-4)}}, self.cb)['status'], 'OK')
+        fresh = snapshot(target=28, measured=19.5)
+        bundle = {'schema':1,'devices':{'h2':fresh}}
+        actual = skill.recent_confirmed_overlay(bundle,'h2',
+                      skill.observed_state(bundle,'h2'),self.services,
+                      time.monotonic()+1.5)
+        self.assertEqual(actual['capabilities'][1]['state']['value'], 28)
+
+
+
 if __name__ == '__main__':
     unittest.main()
