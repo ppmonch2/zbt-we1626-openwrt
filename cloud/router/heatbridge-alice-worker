@@ -23,7 +23,7 @@ fields="$(printf '%s' "$job" | jq -er '
   length==64 and (explode|all((.>=48 and .<=57) or (.>=97 and .<=102))) end) and
  (.heater=="h1" or .heater=="h2" or .heater=="h3" or .heater=="h4") and
  (.value|type=="number" and .==floor) and
- ((.action=="set" and .value>=5 and .value<=30) or
+ ((.action=="set" and .value>=10 and .value<=35) or
   (.action=="mode" and (.value==0 or .value==1))) and
  (.expires_at|type=="number" and .>now and .<=now+4))
  then [.id,.heater,.action,.value,.expires_at]|@tsv

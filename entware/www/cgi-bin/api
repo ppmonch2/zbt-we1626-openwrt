@@ -69,7 +69,7 @@ if [ "$method" = POST ]; then
    value="$(printf '%s' "$payload" | jq -r '.value // empty')"
    case "$value" in ''|*[!0-9]*) error invalid_value;; esac
    if [ "$action" = set ]; then
-    [ "$value" -ge 5 ] && [ "$value" -le 30 ] || error invalid_temperature
+    [ "$value" -ge 10 ] && [ "$value" -le 35 ] || error invalid_temperature
    else
     case "$value" in 0|1|2|3) ;; *) error invalid_mode;; esac
    fi
@@ -82,8 +82,32 @@ if [ "$method" = POST ]; then
   *) error invalid_action;;
  esac
 fi
+# Read the most recent authenticated device cache without contacting heaters.
+# Validate timestamps per field: a recent setpoint must not refresh an old sensor reading.
+state_dir="${HEATBRIDGE_DEVICE_RUNTIME:-/tmp/heatbridge}/states"
+set --
+for state_id in h1 h2 h3 h4; do
+ [ ! -s "$state_dir/$state_id.json" ] || set -- "$@" "$state_dir/$state_id.json"
+done
+observed="$(jq -cs '
+ now as $now |
+ def recent($stamp):
+  ($stamp|type)=="number" and $stamp >= $now-90 and $stamp <= $now+5;
+ def sensor($key;$min;$max):
+  if (.result[$key]|type)=="number" and
+     .result[$key]>=$min and .result[$key]<=$max and
+     recent(.field_observed_at[$key]) then .result[$key] else null end;
+ [ .[] | select((.heater=="h1" or .heater=="h2" or .heater=="h3" or .heater=="h4")
+      and .online==true and .result.encrypted_session==true and recent(.observed_at)) |
+   {key:.heater, value:{
+     observed_at:.observed_at,
+     reported_target:sensor("reported_target";10;35),
+     current_temperature:sensor("current_temperature";-60;100),
+     device_mode:sensor("device_mode";0;3)
+   }} ] | from_entries
+' "$@" < /dev/null)" || observed='{}'
 # Explicit allowlist: no tokens, URLs, public keys or credentials reach GET responses.
 header
-jq -c --argjson result "$result" '{ok:true,alice_route:"existing_hommyn",result:$result,
+jq -c --argjson result "$result" --argjson states "$observed" '{ok:true,alice_route:"existing_hommyn",result:$result,states:$states,
  heaters:[.heaters|to_entries[]|{id:.key,name:.value.name,temp:.value.temp,
  configured:((.value.device_id // "")!=""),verified:(.value.verified // false)}]}' "$config"

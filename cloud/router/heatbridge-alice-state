@@ -11,8 +11,16 @@ work="$runtime/telemetry"
 mkdir -p "$work" "$states"
 chmod 700 "$work" "$states"
 child=''
+one_shot=false
+upload_file="$work/upload.json"
+case "${1:-}" in
+ --publish-once) one_shot=true; upload_file="$work/upload-urgent-$.json" ;;
+ '') ;;
+ *) echo 'Usage: heatbridge-alice-state [--publish-once]' >&2; exit 2 ;;
+esac
 cleanup() {
  if [ -n "$child" ]; then kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; fi
+ [ "$one_shot" != true ] || rm -f "$upload_file"
 }
 trap cleanup EXIT
 trap 'exit 0' INT TERM HUP
@@ -35,14 +43,14 @@ publish() {
    devices:(map(select(.heater as $id | $config[0].heaters[$id].verified==true)) |
     map({key:.heater,value:{heater,online,observed_at,field_observed_at,
      result:(.result|{encrypted_session,reported_target,current_temperature,device_mode})}}) |
-    from_entries)}' "$@" < /dev/null > "$work/upload.json" || return 1
+    from_entries)}' "$@" < /dev/null > "$upload_file" || return 1
  if [ "${HEATBRIDGE_STATE_TRANSPORT:-cloud}" = disk ]; then
   disk_http PUT /acks/state-v1.json /dev/null -H 'Content-Type: application/json' \
-   --data-binary "@$work/upload.json" &
+   --data-binary "@$upload_file" &
  else
   curl -q --config "$runtime/curl.conf" --proto '=https' --connect-timeout 2 \
   --max-time 3 -fsS --aws-sigv4 'aws:amz:ru-central1:s3' -X PUT \
-  -H 'Content-Type: application/json' --data-binary "@$work/upload.json" \
+  -H 'Content-Type: application/json' --data-binary "@$upload_file" \
   "https://storage.yandexcloud.net/$bucket/acks/state-v1.json" \
    > /dev/null 2> /dev/null &
  fi
@@ -53,6 +61,14 @@ publish() {
   child=''; printf '%s\n' 'state_upload_failed' > "$work/status"
  fi
 }
+# Urgent verified-command publication skips device I/O completely: the
+# worker has already written an authenticated echo into the local state cache.
+# A unique snapshot file prevents collision with the background publisher.
+if [ "$one_shot" = true ]; then
+ publish
+ exit $?
+fi
+
 while :; do
  for id in h1 h2 h3 h4; do
   if ! jq -e --arg id "$id" '.heaters[$id].verified==true' \
@@ -74,7 +90,20 @@ while :; do
     ;;
   esac
   publish || true
-  sleep 2 & child=$!; wait "$child" || true; child=''
+  # Commands update the local verified state cache immediately. The Disk agent
+  # leaves a marker after a successful hardware echo. During the normal
+  # two-second interval, check every 200 ms and republish the actual cached
+  # state at once; never invent a requested target from a queued command.
+  tick=0
+  while [ "$tick" -lt 10 ]; do
+   if [ -f "$work/command-updated" ]; then
+    rm -f "$work/command-updated"
+    publish || true
+    break
+   fi
+   sleep 0.2 & child=$!; wait "$child" || true; child=''
+   tick=$((tick+1))
+  done
  done
  # Avoid a busy loop if all devices have been unconfigured.
  sleep 2 & child=$!; wait "$child" || true; child=''

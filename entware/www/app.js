@@ -6,7 +6,15 @@ async function request(data){
  const options=data?{method:'POST',headers:{'Content-Type':'application/json','X-Heatbridge':'1'},body:JSON.stringify(data)}:{};
  const response=await fetch('cgi-bin/api',options);const payload=await response.json();
  if(!response.ok||!payload.ok)throw new Error(errors[payload.error]||payload.error||'Ошибка соединения');
- heaters=payload.heaters;return payload;
+ heaters=payload.heaters;
+ if(payload.states && typeof payload.states === 'object') {
+  states.clear();
+  for(const h of heaters) {
+   const snapshot=payload.states[h.id];
+   if(h.verified && snapshot && typeof snapshot === 'object') states.set(h.id,snapshot);
+  }
+ }
+ return payload;
 }
 function parseShare(text){
  const u=new URL(text.trim());
@@ -22,7 +30,7 @@ async function operate(id,action,value){
  if(busy)return;busy=true;render();status.className='';status.textContent='Соединяюсь с обогревателем…';
  try{
   const data=await request({id,action,...(value===undefined?{}:{value})});
-  if(data.result)states.set(id,data.result);
+  if(data.result && !states.has(id))states.set(id,data.result);
   status.textContent=action==='probe'?'Состояние прочитано. Локальное управление доступно.':data.result.state_echo_matches_request?'Прибор подтвердил команду и сообщил соответствующую уставку или режим.':'Прибор подтвердил команду; новое состояние ещё не получено.';
  }catch(e){states.delete(id);status.className='error';status.textContent=e.message;}
  finally{busy=false;render();}
@@ -32,11 +40,20 @@ function render(){
  for(const h of heaters){
   const card=node('article');card.append(node('h2',h.name));
   const s=states.get(h.id);let description=h.configured?(h.verified?'Устройство настроено. Нажмите «Проверить», чтобы получить свежие данные.':'Ссылка сохранена. Сначала прочитайте состояние.'):'Добавьте личную ссылку HOMMYN ниже.';
-  if(s){const parts=[];if(s.current_temperature!==null)parts.push('В комнате '+s.current_temperature+' °C');if(s.reported_target!==null)parts.push('Уставка '+s.reported_target+' °C');if(s.device_mode!==null)parts.push('Режим '+({0:'выключен',1:'Комфорт',2:'Эко',3:'Антизамерзание'}[s.device_mode]||s.device_mode));description=parts.join(' · ')||'Шифрованное соединение установлено.';}
+  if(s){
+   const parts=[];
+   if(typeof s.current_temperature==='number')parts.push('В комнате '+s.current_temperature+' °C');
+   if(typeof s.reported_target==='number')parts.push('Уставка '+s.reported_target+' °C');
+   if(typeof s.device_mode==='number')parts.push('Режим '+({0:'выключен',1:'Комфорт',2:'Эко',3:'Антизамерзание'}[s.device_mode]??s.device_mode));
+   if(parts.length){
+    const stamp=typeof s.observed_at==='number' ? ' · проверено '+new Date(s.observed_at*1000).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}) : '';
+    description=parts.join(' · ')+stamp;
+   } else description='Свежие показания пока недоступны. Проверьте состояние прибора.';
+  }
   card.append(node('p',description,'state'));
   card.append(button('Проверить состояние',()=>operate(h.id,'probe'),!h.configured,true));
-  const controls=node('div',null,'controls'),temp=node('input');temp.type='number';temp.min='5';temp.max='30';temp.step='1';temp.value=s?.reported_target??h.temp??18;temp.setAttribute('aria-label','Уставка температуры');temp.disabled=busy||!h.verified;
-  controls.append(temp,node('span','°C'),button('Задать',()=>{const value=Number(temp.value);if(!Number.isInteger(value)||value<5||value>30){status.textContent='Допустимы целые температуры 5–30 °C.';return;}operate(h.id,'set',value);},!h.verified));card.append(controls);
+  const controls=node('div',null,'controls'),temp=node('input');temp.type='number';temp.min='10';temp.max='35';temp.step='1';temp.value=s?.reported_target??h.temp??18;temp.setAttribute('aria-label','Уставка температуры');temp.disabled=busy||!h.verified;
+  controls.append(temp,node('span','°C'),button('Задать',()=>{const value=Number(temp.value);if(!Number.isInteger(value)||value<10||value>35){status.textContent='Допустимы целые температуры 10–35 °C.';return;}operate(h.id,'set',value);},!h.verified));card.append(controls);
   const power=node('div',null,'controls');power.append(button('Включить · Комфорт',()=>operate(h.id,'mode',1),!h.verified,true),button('Выключить',()=>operate(h.id,'mode',0),!h.verified,true));card.append(power);
   const details=node('details');details.append(node('summary',h.configured?'Заменить привязку':'Подключить обогреватель'));
   const name=node('input');name.type='text';name.maxLength=32;name.value=h.name;name.id='name-'+h.id;
@@ -61,4 +78,6 @@ async function preset(value){
 }
 document.getElementById('away').onclick=()=>preset(12);document.getElementById('arrive').onclick=()=>preset(22);
 document.getElementById('refresh').onclick=async()=>{if(busy)return;try{await request();render();status.textContent='Список обновлён. Для свежей температуры нажмите «Проверить состояние».';}catch(e){status.textContent=e.message;}};
-request().then(()=>{render();status.textContent='Локальный сервер готов. Алиса продолжает работать через HOMMYN.';}).catch(e=>{status.className='error';status.textContent=e.message;});
+request().then(()=>{render();status.textContent='Локальный сервер готов. Для свежих показаний включите канал обмена.';}).catch(e=>{status.className='error';status.textContent=e.message;});
+// Refresh only the locally cached observations, never send a heater command.
+setInterval(async()=>{if(busy)return;try{await request();render();}catch(_){/* Leave controls usable when offline. */}},30000);

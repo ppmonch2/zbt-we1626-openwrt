@@ -5,7 +5,7 @@ import os
 import re
 import time
 
-from device_state import FLOAT, STATE_MAX_AGE, observed_state, supported
+from device_state import FLOAT, STATE_MAX_AGE, observed_setpoint, observed_state, supported
 
 from yandex_services import ServiceError, error_details, from_environment, cached_owner_authorized
 
@@ -36,12 +36,12 @@ def command(capability, relative_target=None):
         if relative is True:
             if relative_target is None:
                 raise ValueError('INVALID_ACTION')
-            if type(value) not in (int, float) or not -30 <= value <= 30 or int(value) != value:
+            if type(value) not in (int, float) or not -25 <= value <= 25 or int(value) != value:
                 raise ValueError('INVALID_VALUE')
             value += relative_target
         elif relative is not False:
             raise ValueError('INVALID_ACTION')
-        if type(value) not in (int, float) or not 5 <= value <= 30 or int(value) != value:
+        if type(value) not in (int, float) or not 10 <= value <= 35 or int(value) != value:
             raise ValueError('INVALID_VALUE')
         return 'set', int(value)
     raise ValueError('INVALID_ACTION')
@@ -61,18 +61,72 @@ def confirmed(ack, job):
     return type(result.get(field)) in (int, float) and result[field] == job['value']
 
 
-def catalog(names, state_available=False):
+def catalog(names, state_available=False, push=False, hybrid=False):
     return [{'id': key, 'name': name, 'type': 'devices.types.thermostat',
              'description': 'Локальный Ballu через роутер, без HOMMYN',
              'capabilities': [
-                 {'type': POWER, 'retrievable': state_available, 'reportable': False},
-                 {'type': RANGE, 'retrievable': state_available, 'reportable': False,
+                 {'type': POWER, 'retrievable': state_available and not push, 'reportable': push or hybrid},
+                 {'type': RANGE, 'retrievable': state_available and not push, 'reportable': push or hybrid,
                   'parameters': {'instance': 'temperature', 'unit': 'unit.temperature.celsius',
-                                 'random_access': True, 'range': {'min': 5, 'max': 30, 'precision': 1}}}],
-             **({'properties': [{'type': FLOAT, 'retrievable': True, 'reportable': False,
+                                 'random_access': True, 'range': {'min': 10, 'max': 35, 'precision': 1}}}],
+             **({'properties': [{'type': FLOAT, 'retrievable': not push, 'reportable': push or hybrid,
                   'parameters': {'instance': 'temperature', 'unit': 'unit.temperature.celsius'}}]}
                 if state_available else {})}
             for key, name in names.items()]
+
+
+
+def recent_confirmed_overlay(snapshot, heater, state, services, deadline):
+    """Keep query retrievable, but never replace a newer confirmed callback
+    with the router publisher's older value. The ledger only contains state
+    accepted by Alice callback/202, not queued requests or optimistic intents.
+    A missing ledger leaves the original router observation unchanged.
+    """
+    if not isinstance(state, dict) or not supported(snapshot):
+        return state
+    try:
+        remaining = deadline - time.monotonic() - .10
+        if remaining <= .15:
+            return state
+        ledger = services.read_json('/probes/alice-push-ledger.json',
+                                    deadline, timeout_cap=min(.9, remaining))
+    except (ServiceError, OSError, AttributeError, ValueError):
+        return state
+    if not isinstance(ledger, dict) or ledger.get('schema') != 2:
+        return state
+    fields = (ledger.get('devices') or {}).get(heater)
+    local = snapshot['devices'].get(heater)
+    if not isinstance(fields, dict) or not isinstance(local, dict):
+        return state
+    local_stamps = local.get('field_observed_at') or {}
+    if not isinstance(local_stamps, dict):
+        local_stamps = {}
+    now = time.time()
+    for field, key, cap_type in (
+        ('target', 'reported_target', RANGE),
+        ('power', 'device_mode', POWER),
+    ):
+        record = fields.get(field)
+        if not isinstance(record, dict):
+            continue
+        ts = record.get('ts')
+        if (type(ts) not in (float, int) or
+                not now - 90 <= ts <= now + 5):
+            continue
+        oldstamp = local_stamps.get(key, local.get('observed_at', 0))
+        if type(oldstamp) not in (float, int) or ts <= oldstamp:
+            continue
+        value = record.get('value')
+        if field == 'target':
+            if type(value) is not int or not 10 <= value <= 35:
+                continue
+        elif type(value) is not bool:
+            continue
+        for cap in state.get('capabilities', []):
+            if cap.get('type') == cap_type:
+                cap['state']['value'] = value
+                break
+    return state
 
 
 def process(event, names, owner_uid, services, authorize=cached_owner_authorized):
@@ -94,8 +148,19 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
         return {**response, 'payload': {'error_code': 'ACCOUNT_LINKING_ERROR'}}
     trace('authorized')
     kind = event.get('request_type')
+    disk_transport = getattr(services, 'transport', None) == 'disk'
+    async_disk = (disk_transport and os.environ.get('HEATBRIDGE_ASYNC_ACTIONS') == '1')
+    push_state = (disk_transport and os.environ.get('HEATBRIDGE_PUSH_STATE') == '1')
+    hybrid_state = (disk_transport and os.environ.get('HEATBRIDGE_HYBRID_STATE') == '1')
     snapshot, state_error = None, False
     snapshot_loaded = kind in ('discovery', 'query')
+    # Device discovery describes capabilities, not current reachability.
+    # A momentary WebDAV failure or no first snapshot must not permanently
+    # register Disk-powered devices as retrievable:false in Alice.
+    if kind == 'discovery' and disk_transport:
+        trace('disk_discovery_without_state_dependency')
+        return {**response, 'payload': {'user_id': owner_uid,
+                'devices': catalog(names, True, push_state, hybrid_state)}}
     if kind in ('discovery', 'query'):
         try:
             reader = getattr(services, 'state_snapshot', None)
@@ -108,7 +173,7 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
         if state_error:
             return {**response, 'payload': {'error_code': 'INTERNAL_ERROR'}}
         return {**response, 'payload': {'user_id': owner_uid,
-                'devices': catalog(names, supported(snapshot))}}
+                'devices': catalog(names, supported(snapshot), push_state, hybrid_state)}}
     if kind == 'unlink':
         return response
     payload = event.get('payload')
@@ -139,6 +204,9 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
                     entry['error_code'] = 'DEVICE_UNREACHABLE'
                     trace('state_missing_stale_or_invalid', heater=heater)
                 else:
+                    if hybrid_state:
+                        state = recent_confirmed_overlay(snapshot, heater, state,
+                                                         services, deadline)
                     entry.update(state)
                     trace('state_returned', heater=heater)
             continue
@@ -166,10 +234,9 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
                                 snapshot = reader(deadline)
                             except ServiceError:
                                 snapshot = None
-                        measured = observed_state(snapshot, heater)
-                        if measured is None:
+                        relative_target = observed_setpoint(snapshot, heater)
+                        if relative_target is None:
                             raise ValueError('DEVICE_UNREACHABLE')
-                        relative_target = measured['capabilities'][1]['state']['value']
                 action, value = command(capability, relative_target)
             except ValueError as exc:
                 result['state']['action_result'] = failure(str(exc))
@@ -191,6 +258,26 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
         try:
             batch_submit([job for job, result in pending], deadline)
             trace('disk_batch_submitted', commands=len(pending), batch_id=getattr(services, 'batch', None))
+            if async_disk and time.monotonic() < deadline:
+                # A separate, private Cloud Function watches only the verified
+                # ACK on Disk. This is best effort; periodic notifications remain
+                # a recovery fallback. No router-to-cloud HTTPS is required.
+                if push_state or hybrid_state:
+                    try:
+                        from fast_push import invoke
+                        dispatched = invoke(getattr(services, 'batch', ''),
+                                            [job for job, _ in pending],
+                                            os.environ.get('HEATBRIDGE_FAST_NOTIFY_FUNCTION_ID', ''),
+                                            deadline)
+                        trace('fast_notify_accepted' if dispatched else 'fast_notify_not_accepted')
+                    except (ValueError, KeyError, OSError, TypeError):
+                        trace('fast_notify_unavailable')
+                # DONE acknowledges a durable mailbox write, never heater execution.
+                # Real state must be delivered via confirmed callback.
+                for job, result in pending:
+                    result['state']['action_result'] = {'status': 'DONE'}
+                trace('disk_async_queued_for_callback', commands=len(pending))
+                pending.clear()
         except ServiceError as exc:
             trace('disk_batch_submit_failed', **error_details(exc))
             pending.clear()
@@ -256,6 +343,9 @@ def handler(event, context):
                 'parallel_ack_connection': not disk_transport, 'owner_check_cache_seconds': 30,
                 'response_budget_seconds': RESPONSE_BUDGET,
                 'state_reporting': 'auto', 'state_max_age_seconds': STATE_MAX_AGE,
+                'push_state': (disk_transport and os.environ.get('HEATBRIDGE_PUSH_STATE') == '1'),
+                'hybrid_state': (disk_transport and os.environ.get('HEATBRIDGE_HYBRID_STATE') == '1'),
+                'fast_push_configured': bool(os.environ.get('HEATBRIDGE_FAST_NOTIFY_FUNCTION_ID')),
                 'state_router_min_version': '0.2.0' if disk_transport else '0.1.3'}
     if event == {'heatbridge_diagnostic': 'disk_probe'}:
         services = None
@@ -263,11 +353,19 @@ def handler(event, context):
             services = from_environment()
             if getattr(services, 'transport', None) != 'disk':
                 return {'diagnostic': 'disk_probe', 'heater_control': False, 'status': 'SELECT_DISK_TRANSPORT'}
-            return {'diagnostic': 'disk_probe', **services.probe(time.monotonic() + 2.5)}
+            return {'diagnostic': 'disk_probe', **services.probe(time.monotonic() + 2.8)}
         except (KeyError, ValueError, TypeError):
             return {'diagnostic': 'disk_probe', 'heater_control': False, 'status': 'INVALID_CONFIGURATION'}
         except ServiceError as exc:
-            return {'diagnostic': 'disk_probe', 'heater_control': False, 'status': 'ERROR', **error_details(exc)}
+            return {'diagnostic': 'disk_probe', 'heater_control': False, 'status': 'ERROR',
+                    **error_details(exc),
+                    **({'phase': exc.probe_phase} if getattr(exc, 'probe_phase', None) in
+                       ('write', 'read', 'delete') else {}),
+                    **({'network_stage': exc.network_stage}
+                       if getattr(exc, 'network_stage', None) in
+                       ('connect', 'send', 'response', 'body') else {}),
+                    **({'network_kind': exc.network_kind, 'elapsed_ms': exc.elapsed_ms}
+                       if getattr(exc, 'network_kind', None) is not None else {})}
         finally:
             if services:
                 services.close()
@@ -315,6 +413,26 @@ def handler(event, context):
                 print(json.dumps({'request_id': identity}))
         services = from_environment()
         try:
+            if os.environ.get('HEATBRIDGE_HYBRID_STATE') == '1' and os.environ.get('HEATBRIDGE_PUSH_STATE') == '1':
+                raise ValueError('Cannot select both push-only and hybrid')
+            if os.environ.get('HEATBRIDGE_PUSH_STATE') == '1' or os.environ.get('HEATBRIDGE_HYBRID_STATE') == '1':
+                # Never disable Yandex query before private callback delivery is configured.
+                if getattr(services, 'transport', None) != 'disk' or os.environ.get('HEATBRIDGE_ASYNC_ACTIONS') != '1':
+                    raise ValueError('Push requires Disk and async callbacks')
+                if not re.fullmatch(r'[A-Za-z0-9_-]{6,128}',
+                                    os.environ.get('HEATBRIDGE_FAST_NOTIFY_FUNCTION_ID', '')):
+                    raise ValueError('Missing private notifier ID')
+            if os.environ.get('HEATBRIDGE_ASYNC_ACTIONS') == '1':
+                # Never claim async success unless the notification publisher
+                # has been explicitly configured (and its timer activated).
+                if getattr(services, 'transport', None) != 'disk':
+                    raise ValueError('Async actions require Disk')
+                if not re.fullmatch(r'[A-Za-z0-9_-]{6,128}',
+                                    os.environ.get('HEATBRIDGE_DIALOGS_SKILL_ID', '')):
+                    raise ValueError('Missing Dialogs skill ID')
+                dialogs_token = os.environ.get('HEATBRIDGE_DIALOGS_OAUTH_TOKEN', '')
+                if not 16 <= len(dialogs_token) <= 2048 or any(c.isspace() for c in dialogs_token):
+                    raise ValueError('Missing Dialogs OAuth token')
             return process(event, names, owner, services)
         finally:
             close = getattr(services, 'close', None)

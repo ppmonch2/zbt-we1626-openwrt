@@ -40,10 +40,38 @@ def observed_state(bundle, heater, now=None):
             return None
     target, measured, mode = (result.get(name) for name in
                               ('reported_target', 'current_temperature', 'device_mode'))
-    if (not number(target, 5, 35) or not number(measured, -60, 100) or
+    if (not number(target, 10, 35) or not number(measured, -60, 100) or
             type(mode) is not int or mode not in (0, 1, 2, 3)):
         return None
     return {'capabilities': [
         {'type': 'devices.capabilities.on_off', 'state': {'instance': 'on', 'value': mode != 0}},
         {'type': 'devices.capabilities.range', 'state': {'instance': 'temperature', 'value': target}}],
         'properties': [{'type': FLOAT, 'state': {'instance': 'temperature', 'value': measured}}]}
+
+
+def observed_setpoint(bundle, heater, now=None):
+    """Return only a fresh, encrypted device setpoint for relative +/- actions.
+
+    A missing or stale room-temperature sensor must not disable the thermostat
+    setpoint buttons. Conversely, never calculate an adjustment using an old,
+    unverified or offline target.
+    """
+    if not supported(bundle):
+        return None
+    snapshot = bundle['devices'].get(heater)
+    if not isinstance(snapshot, dict) or snapshot.get('heater') != heater:
+        return None
+    now = time.time() if now is None else now
+    if snapshot.get('online') is not True or not number(
+            snapshot.get('observed_at'), now - STATE_MAX_AGE, now + FUTURE_TOLERANCE):
+        return None
+    result = snapshot.get('result')
+    if not isinstance(result, dict) or result.get('encrypted_session') is not True:
+        return None
+    stamps = snapshot.get('field_observed_at')
+    if stamps is not None:
+        if not isinstance(stamps, dict) or not number(
+                stamps.get('reported_target'), now - STATE_MAX_AGE, now + FUTURE_TOLERANCE):
+            return None
+    target = result.get('reported_target')
+    return target if number(target, 10, 35) and target == int(target) else None

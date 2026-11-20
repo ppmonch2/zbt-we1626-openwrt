@@ -35,6 +35,14 @@ while :; do
    batch_pid=$!
    outcome=0; wait "$batch_pid" || outcome=$?; batch_pid=''
    if [ "$outcome" = 0 ]; then
+    # A confirmed hardware echo has already refreshed local heater state.
+    # Wake the telemetry publisher now rather than waiting for the next
+    # four-heater read cycle. Never claim a new state on failed commands.
+    if jq -e '[.acks[] | select(.ok == true)] | length > 0' \
+         "$disk_work/acks.json" >/dev/null 2>&1; then
+     mkdir -p "$runtime/telemetry"
+     : > "$runtime/telemetry/command-updated"
+    fi
     if ! disk_http PUT "/acks/$name" /dev/null -H 'Content-Type: application/json' \
          --data-binary "@$disk_work/acks.json"; then
      printf '%s\n' 'disk_ack_upload_failed' > "$runtime/status"

@@ -98,11 +98,11 @@ int main(int argc,char **argv) {
     if(argc==2 && !strcmp(argv[1],"read")) setting=0;
     else if(argc==3 && !strcmp(argv[1],"set")) {
         char *end;long t=strtol(argv[2],&end,10);
-        if(!*argv[2] || *end || t<5 || t>30) return fail("invalid_temperature");
+        if(!*argv[2] || *end || t<10 || t>35) return fail("invalid_temperature");
         setting=1;temp=(int)t;
     } else if(argc==3 && !strcmp(argv[1],"mode") && strlen(argv[2])==1 && argv[2][0]>='0' && argv[2][0]<='3') {
         setting=1;mode_command=1;temp=argv[2][0]-'0';
-    } else return fail("usage: heatbridge-syncleo read | set INTEGER_5_TO_30 | mode 0_TO_3");
+    } else return fail("usage: heatbridge-syncleo read | set INTEGER_10_TO_35 | mode 0_TO_3");
     char ip[64],porttext[16],publictext[80],tokentext[48];
     unsigned char publickey[32],token[16],handshake[53]={0,1,49,0,0};
     if(!line(ip,sizeof(ip)) || !line(porttext,sizeof(porttext)) || !line(publictext,sizeof(publictext)) ||
@@ -142,7 +142,7 @@ int main(int argc,char **argv) {
         if(buf[1]==255) { close(fd);return fail("device_rejected_command"); }
         if(buf[1]!=1 || size<1) continue;
         if(!send_frame(fd,buf[0],0,NULL,0)) break;
-        if(plain[0]==2 && size==3 && plain[1]<=35 && plain[2]==0) {
+        if(plain[0]==2 && size==3 && plain[1]>=10 && plain[1]<=35 && plain[2]==0) {
             target=plain[1]; if(setting && !mode_command && target==temp) echo=1;
         }
         if(plain[0]==1 && size==2) {mode=plain[1];if(setting && mode_command && mode==temp)echo=1;}

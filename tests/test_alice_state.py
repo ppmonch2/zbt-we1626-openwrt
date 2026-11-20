@@ -61,6 +61,31 @@ class AliceStateTest(unittest.TestCase):
         self.assertNotIn('properties', old_router)
         self.assertFalse(old_router['capabilities'][1]['retrievable'])
 
+    def test_disk_discovery_is_stable_without_webdav_state_or_publisher(self):
+        class UnavailableDisk(StateServices):
+            transport = 'disk'
+            def state_snapshot(self, deadline):
+                raise ServiceError('cloud_connection_error', service='webdav')
+        client = UnavailableDisk(None)
+        discovery = self.request(client, 'discovery')['payload']['devices']
+        self.assertEqual(client.reads, 0)
+        self.assertEqual(len(discovery), 4)
+        self.assertTrue(all(all(c['retrievable'] for c in d['capabilities'])
+                            for d in discovery))
+        self.assertTrue(all(d['properties'][0]['retrievable'] for d in discovery))
+        # A failed current-state read still marks query as unreachable. We
+        # must not synthesize values, but device capabilities remain registered.
+        result = self.request(client, 'query')['payload']['devices'][0]
+        self.assertEqual(result['error_code'], 'DEVICE_UNREACHABLE')
+
+    def test_disk_discovery_is_retrievable_before_first_router_publication(self):
+        client = StateServices(None)
+        client.transport = 'disk'
+        d = self.request(client, 'discovery')['payload']['devices'][0]
+        self.assertEqual(client.reads, 0)
+        self.assertTrue(d['capabilities'][1]['retrievable'])
+        self.assertIn('properties', d)
+
     def test_query_reads_all_four_heaters_in_one_get_and_never_submits_commands(self):
         states = {f'h{i}': snapshot(f'h{i}', 20+i, 18+i/10, 0 if i == 1 else i-1)
                   for i in range(1, 5)}
@@ -127,6 +152,50 @@ class AliceStateTest(unittest.TestCase):
         self.assertFalse(client.jobs)
         self.assertEqual(response['payload']['devices'][0]['capabilities'][0]['state']['action_result']['error_code'],
                          'DEVICE_UNREACHABLE')
+
+    def test_alice_plus_minus_buttons_use_fresh_setpoint_even_without_room_sensor(self):
+        # Yandex sends relative:true +1/-1 for thermostat controls.
+        for delta, expected in ((1, 22), (-1, 20)):
+            with self.subTest(delta=delta):
+                state = snapshot(target=21, measured=18.5)
+                state['result']['current_temperature'] = None
+                state['field_observed_at']['current_temperature'] = time.time() - 200
+                client = StateServices({'schema': 1, 'devices': {'h2': state}})
+                request = event(delta)
+                request['payload']['devices'][0]['capabilities'][0]['state']['relative'] = True
+                response = skill.process(request, {'h2': 'Мансарда'}, '123', client,
+                                         authorize=lambda *args: True)
+                self.assertEqual([job['value'] for job in client.jobs], [expected])
+                self.assertEqual(response['payload']['devices'][0]['capabilities'][0]
+                                 ['state']['action_result']['status'], 'DONE')
+
+    def test_alice_relative_buttons_refuse_stale_or_boundary_setpoints(self):
+        for target, stamp, delta in ((35, time.time(), 1), (10, time.time(), -1),
+                                      (22, time.time()-120, 1)):
+            with self.subTest(target=target, delta=delta):
+                state = snapshot(target=target)
+                state['observed_at'] = stamp
+                state['field_observed_at']['reported_target'] = stamp
+                client = StateServices({'schema': 1, 'devices': {'h2': state}})
+                request = event(delta)
+                request['payload']['devices'][0]['capabilities'][0]['state']['relative'] = True
+                response = skill.process(request, {'h2': 'Мансарда'}, '123', client,
+                                         authorize=lambda *args: True)
+                self.assertFalse(client.jobs)
+                self.assertEqual(response['payload']['devices'][0]['capabilities'][0]
+                                 ['state']['action_result']['status'], 'ERROR')
+
+    def test_relative_buttons_can_reach_35_from_34_and_10_from_11(self):
+        for old, delta, expected in ((34, 1, 35), (11, -1, 10)):
+            with self.subTest(old=old, delta=delta):
+                client = StateServices({'schema': 1, 'devices': {'h2': snapshot(target=old)}})
+                request = event(delta)
+                request['payload']['devices'][0]['capabilities'][0]['state']['relative'] = True
+                response = skill.process(request, {'h2': 'Мансарда'}, '123', client,
+                                         authorize=lambda *args: True)
+                self.assertEqual(client.jobs[0]['value'], expected)
+                self.assertEqual(response['payload']['devices'][0]['capabilities'][0]
+                                 ['state']['action_result']['status'], 'DONE')
 
     def test_state_reads_are_authorized_and_only_signed_gets_are_needed(self):
         client = StateServices({'schema': 1, 'devices': {'h2': snapshot()}})
@@ -263,6 +332,40 @@ print(json.dumps({'ok':True,'encrypted_session':True,'command_acknowledged':acti
         native.write_text(native.read_text().replace("21.5 if action=='read' else None", 'None'))
         self.assertEqual(self.call().returncode, 0)
         self.assertIsNone(self.read_snapshot()['result']['current_temperature'])
+
+    def test_command_marker_publishes_confirmed_target_without_full_read_cycle(self):
+        # A real set call immediately updates the verified local state file.
+        self.assertEqual(self.call('read', 'h2').returncode, 0)
+        script = '''curl() {
+ cp "$HEATBRIDGE_ALICE_RUNTIME/telemetry/upload.json" "$HEATBRIDGE_PREFIX/uploaded.tmp"\n mv "$HEATBRIDGE_PREFIX/uploaded.tmp" "$HEATBRIDGE_PREFIX/uploaded.json"
+}
+. "''' + str(ROOT/'cloud/router/heatbridge-alice-state') + '"\n'
+        worker = subprocess.Popen(['sh', '-c', script], env=self.env,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            uploaded = self.base/'uploaded.json'
+            until = time.monotonic()+3
+            while not uploaded.exists() and time.monotonic()<until:
+                time.sleep(.01)
+            self.assertTrue(uploaded.exists())
+            self.assertEqual(json.loads(uploaded.read_text())['devices']['h2']
+                             ['result']['reported_target'], 22)
+            self.assertEqual(self.call('set', 'h2', 28).returncode, 0)
+            marker_path = self.base/'runtime/telemetry/command-updated'
+            marker_path.touch()
+            until = time.monotonic()+1.8
+            target = None
+            while time.monotonic()<until:
+                data = json.loads(uploaded.read_text())
+                target = data['devices']['h2']['result']['reported_target']
+                if target == 28:
+                    break
+                time.sleep(.02)
+            self.assertEqual(target, 28, 'Priority publish missed the command marker')
+            self.assertFalse(marker_path.exists())
+        finally:
+            worker.terminate()
+            worker.wait(timeout=3)
 
     def test_poller_uploads_both_temperatures_from_existing_reader(self):
         script = '''curl() {

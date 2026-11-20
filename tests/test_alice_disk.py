@@ -109,13 +109,59 @@ class DiskCloudTest(unittest.TestCase):
             target.write_text(content)
             with self.assertRaises(ServiceError): self.client.acknowledgements(time.monotonic()+1)
 
-    def test_probe_only_writes_reads_deletes_probe_folder(self):
+    def test_probe_validates_write_and_read_without_unnecessary_delete(self):
         result = self.client.probe(time.monotonic()+2)
-        self.assertTrue(result['write_read_delete'])
+        self.assertEqual(result['status'], 'OK')
+        self.assertTrue(result['write_read'])
         self.assertFalse(result['heater_control'])
-        self.assertEqual([call[0] for call in self.connection.calls], ['PUT', 'GET', 'DELETE'])
-        self.assertTrue(all('/probes/' in call[1] for call in self.connection.calls))
-        self.assertEqual(list((self.root/'heatbridge-v1/probes').iterdir()), [])
+        self.assertEqual([call[0] for call in self.connection.calls], ['PUT', 'GET'])
+        self.assertTrue(all('/probes/cloud-check.json' in call[1] for call in self.connection.calls))
+        probe_file = self.root/'heatbridge-v1/probes/cloud-check.json'
+        original_nonce = json.loads(probe_file.read_text())['probe']
+        self.client.probe(time.monotonic()+2)
+        self.assertNotEqual(json.loads(probe_file.read_text())['probe'], original_nonce)
+        self.assertEqual(len(list((self.root/'heatbridge-v1/probes').iterdir())), 1)
+
+    def test_probe_succeeds_even_if_webdav_delete_is_unavailable(self):
+        class DeleteUnavailable(FileConnection):
+            def getresponse(self):
+                if self.last[0] == 'DELETE':
+                    raise TimeoutError('delete is slow')
+                return super().getresponse()
+        connection = DeleteUnavailable(self.root)
+        client = DiskServices('fixture-user', 'fixture-password', connection=connection)
+        with patch('skill.from_environment', return_value=client):
+            result = skill.handler({'heatbridge_diagnostic': 'disk_probe'}, None)
+        self.assertEqual(result['status'], 'OK')
+        self.assertTrue(result['write_read'])
+        self.assertEqual([call[0] for call in connection.calls], ['PUT', 'GET'])
+
+    def test_probe_diagnostic_identifies_write_or_read_failure(self):
+        self.connection.forced_status = 403
+        with patch('skill.from_environment', return_value=self.client):
+            result = skill.handler({'heatbridge_diagnostic': 'disk_probe'}, None)
+        self.assertEqual(result['status'], 'ERROR')
+        self.assertEqual(result['phase'], 'write')
+        self.assertEqual(result['http_status'], 403)
+        self.assertNotIn('fixture-password', json.dumps(result))
+
+        class TimeoutOnRead(FileConnection):
+            def getresponse(self):
+                if self.last[0] == 'GET':
+                    raise TimeoutError('simulated WebDAV timeout')
+                return super().getresponse()
+
+        client = DiskServices('fixture-user', 'fixture-password',
+                              connection=TimeoutOnRead(self.root))
+        with patch('skill.from_environment', return_value=client):
+            result = skill.handler({'heatbridge_diagnostic': 'disk_probe'}, None)
+        self.assertEqual(result['status'], 'ERROR')
+        self.assertEqual(result['phase'], 'read')
+        self.assertEqual(result['reason'], 'cloud_connection_error')
+        self.assertEqual(result['network_stage'], 'response')
+        self.assertEqual(result['network_kind'], 'TimeoutError')
+        self.assertGreaterEqual(result['elapsed_ms'], 0)
+        self.assertNotIn('fixture-password', json.dumps(result))
 
     def test_environment_selects_disk_without_aws_credentials(self):
         with patch.dict(os.environ, {'HEATBRIDGE_TRANSPORT': 'disk',
@@ -139,6 +185,23 @@ class DiskCloudTest(unittest.TestCase):
         self.assertEqual(len(client.jobs), 4)
         self.assertEqual([d['capabilities'][0]['state']['action_result']['status']
                           for d in response['payload']['devices']], ['DONE', 'ERROR', 'DONE', 'DONE'])
+
+    def test_scene_setpoint_and_power_for_one_heater_are_batched_and_confirmed(self):
+        class SceneClient:
+            def submit_many(self, jobs, deadline): self.jobs = jobs
+            def acknowledgements(self, deadline):
+                return {job['id']: ack(job) for job in self.jobs}
+        request = event(value=19)
+        request['payload']['devices'][0]['capabilities'].append({
+            'type': skill.POWER, 'state': {'instance': 'on', 'value': True}})
+        client = SceneClient()
+        response = skill.process(request, {'h2': 'Мансарда'}, '123', client,
+                                 authorize=lambda *args: True)
+        self.assertEqual([(job['action'], job['value']) for job in client.jobs],
+                         [('set', 19), ('mode', 1)])
+        capabilities = response['payload']['devices'][0]['capabilities']
+        self.assertEqual([item['state']['action_result']['status'] for item in capabilities],
+                         ['DONE', 'DONE'])
 
     def test_status_diagnostic_reads_real_sensor_and_setpoint_without_commands(self):
         from test_alice_state import snapshot
@@ -282,6 +345,23 @@ print(json.dumps({'encrypted_session':True,'command_acknowledged':True,'state_ec
         self.assertNotEqual(self.batch(jobs).returncode, 0)
         self.assertFalse((self.base/'device-calls').exists())
 
+    def test_webdav_batches_enforce_actual_10_to_35_range(self):
+        for value in (10, 31, 35):
+            job = self.jobs()[0]
+            job['id'] = f'{value:064x}'
+            job['value'] = value
+            result = self.batch([job])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(json.loads(result.stdout)['acks'][job['id']]['ok'])
+            self.assertEqual(json.loads(result.stdout)['acks'][job['id']]['value'], value)
+        for value in (9, 36):
+            job = self.jobs()[0]
+            job['id'] = str(value % 10) * 64
+            job['value'] = value
+            result = self.batch([job])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(json.loads(result.stdout)['acks'])
+
     def test_same_heater_power_and_temperature_stay_ordered(self):
         jobs = [self.jobs()[0], {**self.jobs()[0], 'id': 'f'*64, 'action': 'mode', 'value': 1}]
         result = self.batch(jobs)
@@ -346,6 +426,8 @@ print(json.dumps({'encrypted_session':True,'command_acknowledged':True,'state_ec
                 time.sleep(.02)
             self.assertEqual(list((self.base/'remote/heatbridge-v1/commands').iterdir()), [])
             self.assertEqual(len((self.base/'device-calls').read_text().splitlines()), 4)
+            self.assertTrue((self.base/'runtime/telemetry/command-updated').exists(),
+                            'Verified Disk batch must wake state publisher')
         finally:
             agent.terminate()
             _, errors = agent.communicate(timeout=5)

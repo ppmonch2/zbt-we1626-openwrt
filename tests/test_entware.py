@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
 ROOT=Path(__file__).resolve().parents[1]
 TOKEN='a1'*16
@@ -29,6 +30,30 @@ print(json.dumps({'ok':True,'encrypted_session':True,'command_acknowledged':sys.
   run=subprocess.run(['sh',str(ROOT/'entware/www/cgi-bin/api')],input=body,text=True,env=env,capture_output=True)
   self.assertEqual(run.returncode,0,run.stderr)
   return json.loads(run.stdout.split('\n\n',1)[1])
+ def test_cached_status_is_recent_sanitized_and_never_calls_heater(self):
+  cfg=json.loads(self.cfg.read_text());cfg['heaters']['h1']['verified']=True
+  self.cfg.write_text(json.dumps(cfg))
+  state_dir=self.root/'device-runtime/states';state_dir.mkdir(parents=True)
+  now=time.time()
+  snap={'heater':'h1','online':True,'observed_at':now,
+   'field_observed_at':{'reported_target':now,'current_temperature':now-120,'device_mode':now},
+   'result':{'encrypted_session':True,'reported_target':23,'current_temperature':18.5,
+    'device_mode':1,'token':TOKEN}}
+  (state_dir/'h1.json').write_text(json.dumps(snap))
+  data=self.request(HEATBRIDGE_DEVICE_RUNTIME=str(self.root/'device-runtime'))
+  self.assertEqual(data['states']['h1']['reported_target'],23)
+  self.assertEqual(data['states']['h1']['device_mode'],1)
+  self.assertIsNone(data['states']['h1']['current_temperature'])
+  self.assertNotIn(TOKEN,json.dumps(data))
+  self.assertFalse((self.root/'calls').exists())
+  snap['field_observed_at']['current_temperature']=now
+  (state_dir/'h1.json').write_text(json.dumps(snap))
+  self.assertEqual(self.request(HEATBRIDGE_DEVICE_RUNTIME=str(self.root/'device-runtime'))
+                    ['states']['h1']['current_temperature'],18.5)
+  snap['observed_at']=now-120
+  (state_dir/'h1.json').write_text(json.dumps(snap))
+  self.assertEqual(self.request(HEATBRIDGE_DEVICE_RUNTIME=str(self.root/'device-runtime'))
+                    ['states'],{})
  def test_get_does_not_expose_token_or_device_id(self):
   data=self.request();self.assertTrue(data['ok'])
   self.assertNotIn(TOKEN,json.dumps(data));self.assertNotIn('aabbccddeeff',json.dumps(data))
@@ -55,12 +80,21 @@ print(json.dumps({'ok':True,'encrypted_session':True,'command_acknowledged':sys.
   (self.root/'fail').touch();data=self.request({'action':'set','id':'h1','value':22})
   self.assertIn('may_have_been_applied',data['error']);self.assertEqual(json.loads(self.cfg.read_text())['heaters']['h1']['temp'],18)
  def test_invalid_ids_and_temperatures_do_not_reach_client(self):
-  for payload in [{'action':'set','id':'h5','value':22},{'action':'set','id':'h1','value':31},{'action':'mode','id':'h1','value':99},{'action':'configure','id':'h1','name':'x','device_id':'aabbccddeeff','token':'bad'}]:
+  for payload in [{'action':'set','id':'h5','value':22},{'action':'set','id':'h1','value':36},{'action':'mode','id':'h1','value':99},{'action':'configure','id':'h1','name':'x','device_id':'aabbccddeeff','token':'bad'}]:
    self.assertFalse(self.request(payload)['ok'])
   self.assertFalse((self.root/'calls').exists())
  def test_confirmed_setpoint_is_persisted(self):
   data=self.request({'action':'set','id':'h1','value':22})
   self.assertTrue(data['ok']);self.assertEqual(json.loads(self.cfg.read_text())['heaters']['h1']['temp'],22)
+ def test_local_api_accepts_10_to_35_inclusive(self):
+  for value in (10, 30, 31, 35):
+   data=self.request({'action':'set','id':'h1','value':value})
+   self.assertTrue(data['ok'])
+   self.assertEqual(json.loads(self.cfg.read_text())['heaters']['h1']['temp'],value)
+  for value in (9,36):
+   self.assertEqual(self.request({'action':'set','id':'h1','value':value})['error'],
+                    'invalid_temperature')
+
 class MdnsParserTest(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
@@ -70,6 +104,16 @@ class MdnsParserTest(unittest.TestCase):
   cls.lib=ctypes.CDLL(str(p/'parser.so'));cls.lib.parse.argtypes=[ctypes.c_char_p,ctypes.c_int,ctypes.POINTER(ctypes.c_int),ctypes.c_char_p,ctypes.c_int]
  @classmethod
  def tearDownClass(cls):cls.tmp.cleanup()
+ def test_native_client_accepts_10_to_35_and_rejects_outside(self):
+  native=Path(self.tmp.name)/'heatbridge-syncleo-test'
+  subprocess.run(['gcc','-Os',str(ROOT/'native/syncleo/main.c'),'-lcrypto',
+                  '-o',str(native)],check=True)
+  for value in (9, 10, 30, 31, 35, 36):
+   run=subprocess.run([str(native),'set',str(value)],input='',
+                      capture_output=True,text=True)
+   expected='invalid_temperature' if value in (9,36) else 'invalid_connection_settings'
+   self.assertIn(expected,run.stderr,(value,run.stderr))
+
  def test_valid_compressed_name_and_updated_offset(self):
   data=b'\x03abc\x05local\0\xc0\x00';pos=ctypes.c_int(11);out=ctypes.create_string_buffer(100)
   self.assertEqual(self.lib.parse(data,len(data),ctypes.byref(pos),out,len(out)),1)
