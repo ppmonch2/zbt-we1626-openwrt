@@ -23,23 +23,34 @@
 
 ## Перенос на флешку без извлечения из роутера
 
-1. Флешка остаётся подключённой к роутеру; не форматируйте её. Подключите Windows-компьютер к Wi-Fi ZBT.
-2. В Проводнике Windows откройте адрес `\\192.168.1.1` и сетевую папку Entware/USB, которую использовали при прежней установке.
-3. Скопируйте **папку `heatbridge-alice` целиком** в корень смонтированного раздела Entware. Убедитесь, что нет двойной вложенности вида `heatbridge-alice/heatbridge-alice/install.sh`.
-4. Если сетевой доступ к флешке отсутствует, **не вынимайте её ради Windows** и не соглашайтесь на предложение форматирования. Остановитесь и проверьте сетевой доступ. Не придумывайте путь к USB наугад.
+Windows обычно не открывает EXT4 напрямую — это не мешает перенести файлы на USB через SSH. **Старую папку `/opt/heatbridge-alice` не удалять и не переименовывать.**
+
+1. Оставьте флешку ENTWARE в роутере и подключите Windows-компьютер к Wi-Fi ZBT.
+2. Распакуйте `Ballu-Alice-Router.zip` на компьютере, чтобы видеть папку `heatbridge-alice`.
+3. В Проводнике откройте **родительскую папку**, где видна `heatbridge-alice`; в адресной строке введите `powershell` и нажмите Enter.
+4. В PowerShell выполните (порт 222 соответствует инструкции Entware; если SSH использует другой порт, примените его):
+
+```powershell
+scp -O -P 222 -r .\heatbridge-alice root@192.168.1.1:/opt/heatbridge-alice-new
+```
+
+5. Введите пароль пользователя root от Entware. Команда копирует файлы по SSH прямо на USB, без Windows-доступа к файловой системе EXT4. Папка назначения `heatbridge-alice-new` должна **ещё не существовать**, иначе возможно появление лишнего уровня вложенности.
+6. Если SSH/SCP выдаёт ошибку, сохраните её текст. Не форматируйте флешку, не удаляйте старую папку и не пытайтесь использовать бинарник прошивки.
+
+**Альтернатива:** если включён сетевой файловый доступ к ENTWARE, можно загрузить файлы туда и без SCP, но также **под новым именем папки**, не заменяя работающие файлы вручную.
 
 ## Проверка и установка через существующее SSH-подключение Entware
 
 Подключитесь к ранее настроенному SSH `endware` / Entware под `root`. Проверьте расположение:
 
 ```sh
-ls -l /opt/heatbridge-alice/install.sh /opt/heatbridge-alice/SHA256SUMS /opt/heatbridge-alice/heatbridge-syncleo
+ls -l /opt/heatbridge-alice-new/install.sh /opt/heatbridge-alice-new/SHA256SUMS /opt/heatbridge-alice-new/heatbridge-syncleo
 ```
 
 Если любой файл отсутствует — исправьте расположение папки до продолжения. После копирования через Windows могут не сохраниться права на выполнение:
 
 ```sh
-chmod 755 /opt/heatbridge-alice/heatbridge-syncleo
+chmod 755 /opt/heatbridge-alice-new/heatbridge-syncleo
 cd /opt/heatbridge-alice
 sha256sum -c SHA256SUMS
 ```
@@ -47,7 +58,7 @@ sha256sum -c SHA256SUMS
 Продолжайте, только когда **все проверки контрольных сумм прошли успешно**. Запустите:
 
 ```sh
-/opt/bin/sh /opt/heatbridge-alice/install.sh
+/opt/bin/sh /opt/heatbridge-alice-new/install.sh
 ```
 
 Ожидаемый результат: `Files installed. Agent was NOT started.`
