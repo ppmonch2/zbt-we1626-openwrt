@@ -86,7 +86,7 @@ sha256sum -c SHA256SUMS
 {"heatbridge_diagnostic":"disk_probe"}
 ```
 
-Ожидается `status: "OK"` и `write_read_delete: true`. Затем:
+Ожидается `status: "OK"` и `write_read: true` — облачная функция записала проверочное значение через WebDAV и прочитала его обратно. Для диагностики используется один перезаписываемый файл `probes/cloud-check.json`; удаление через WebDAV не является условием передачи команд. Затем:
 
 ```json
 {"heatbridge_diagnostic":"disk_status"}
