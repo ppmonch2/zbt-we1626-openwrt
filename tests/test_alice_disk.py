@@ -426,6 +426,8 @@ print(json.dumps({'encrypted_session':True,'command_acknowledged':True,'state_ec
                 time.sleep(.02)
             self.assertEqual(list((self.base/'remote/heatbridge-v1/commands').iterdir()), [])
             self.assertEqual(len((self.base/'device-calls').read_text().splitlines()), 4)
+            self.assertTrue((self.base/'runtime/telemetry/command-updated').exists(),
+                            'Verified Disk batch must wake state publisher')
         finally:
             agent.terminate()
             _, errors = agent.communicate(timeout=5)
