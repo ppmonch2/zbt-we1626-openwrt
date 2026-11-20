@@ -98,7 +98,10 @@ class DiskServices:
         self.batch = f'{int(time.time()):010d}-{identity}'
         body = json.dumps({'schema': 1, 'batch': self.batch, 'jobs': jobs},
                           separators=(',', ':'), allow_nan=False).encode()
-        self.request('PUT', f'/commands/{self.batch}.json', deadline, body)
+        # A command has one durable PUT; its response may take longer than
+        # the fast ACK polls. Bound it by Alice's overall request deadline.
+        self.request('PUT', f'/commands/{self.batch}.json', deadline, body,
+                     timeout_cap=2.3)
 
     def submit(self, job, deadline):
         self.submit_many([job], deadline)
