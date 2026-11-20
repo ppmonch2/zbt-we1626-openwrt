@@ -95,6 +95,7 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
     trace('authorized')
     kind = event.get('request_type')
     disk_transport = getattr(services, 'transport', None) == 'disk'
+    async_disk = (disk_transport and os.environ.get('HEATBRIDGE_ASYNC_ACTIONS') == '1')
     snapshot, state_error = None, False
     snapshot_loaded = kind in ('discovery', 'query')
     # Device discovery describes capabilities, not current reachability.
@@ -198,6 +199,15 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
         try:
             batch_submit([job for job, result in pending], deadline)
             trace('disk_batch_submitted', commands=len(pending), batch_id=getattr(services, 'batch', None))
+            if async_disk and time.monotonic() < deadline:
+                # Yandex officially supports accepting asynchronous actions.
+                # DONE here means the command is durably queued, NOT that the
+                # heater already executed it. A separate timed Cloud Function
+                # must send /callback/state using verified router observations.
+                for job, result in pending:
+                    result['state']['action_result'] = {'status': 'DONE'}
+                trace('disk_async_queued_for_callback', commands=len(pending))
+                pending.clear()
         except ServiceError as exc:
             trace('disk_batch_submit_failed', **error_details(exc))
             pending.clear()
@@ -330,6 +340,17 @@ def handler(event, context):
                 print(json.dumps({'request_id': identity}))
         services = from_environment()
         try:
+            if os.environ.get('HEATBRIDGE_ASYNC_ACTIONS') == '1':
+                # Never claim async success unless the notification publisher
+                # has been explicitly configured (and its timer activated).
+                if getattr(services, 'transport', None) != 'disk':
+                    raise ValueError('Async actions require Disk')
+                if not re.fullmatch(r'[A-Za-z0-9_-]{6,128}',
+                                    os.environ.get('HEATBRIDGE_DIALOGS_SKILL_ID', '')):
+                    raise ValueError('Missing Dialogs skill ID')
+                if not re.fullmatch(r'[^\\s]{16,2048}',
+                                    os.environ.get('HEATBRIDGE_DIALOGS_OAUTH_TOKEN', '')):
+                    raise ValueError('Missing Dialogs OAuth token')
             return process(event, names, owner, services)
         finally:
             close = getattr(services, 'close', None)
