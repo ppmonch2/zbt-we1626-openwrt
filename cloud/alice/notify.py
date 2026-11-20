@@ -268,7 +268,7 @@ def watch_batch(event, settings=None, services=None, callback=send_callback, sec
             raise ValueError('Invalid job fields')
         identifiers.add(job['id'])
     callback_settings(settings)  # never start a watcher without valid settings
-    if settings.get('HEATBRIDGE_TRANSPORT') != 'disk' or settings.get('HEATBRIDGE_PUSH_STATE') != '1':
+    if settings.get('HEATBRIDGE_TRANSPORT') != 'disk' or not (settings.get('HEATBRIDGE_PUSH_STATE') == '1' or settings.get('HEATBRIDGE_HYBRID_STATE') == '1'):
         raise ValueError('Fast push is disabled')
     close_after = services is None
     if services is None:
@@ -320,7 +320,7 @@ def handler(event, context):
             event = json.loads(event)
         if isinstance(event, dict) and 'heatbridge_watch_batch' in event:
             return watch_batch(event)
-        if os.environ.get('HEATBRIDGE_PUSH_STATE') == '1':
+        if os.environ.get('HEATBRIDGE_PUSH_STATE') == '1' or os.environ.get('HEATBRIDGE_HYBRID_STATE') == '1':
             services = from_environment()
             try:
                 if getattr(services, 'transport', None) != 'disk':
