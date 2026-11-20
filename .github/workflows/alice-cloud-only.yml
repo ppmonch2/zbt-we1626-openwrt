@@ -22,7 +22,7 @@ jobs:
         run: |
           mkdir -p output-cloud
           cd cloud/alice
-          zip -q -j ../../output-cloud/Ballu-Alice-Function.zip skill.py yandex_services.py diagnostics.py device_state.py disk_services.py
+          zip -q -j ../../output-cloud/Ballu-Alice-Function.zip skill.py yandex_services.py diagnostics.py device_state.py disk_services.py notify.py
           unzip -t ../../output-cloud/Ballu-Alice-Function.zip
       - uses: actions/upload-artifact@v4
         with:
