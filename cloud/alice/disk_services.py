@@ -37,7 +37,7 @@ class DiskServices:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise ServiceError('deadline', service='webdav')
-        timeout = min(.8, remaining)
+        timeout = min(1.35, remaining)
         if self.connection is None:
             self.connection = http.client.HTTPSConnection('webdav.yandex.ru', timeout=timeout)
         connection = self.connection
@@ -110,10 +110,16 @@ class DiskServices:
         """Write/read/delete a nonce in a folder the router never executes."""
         path = '/probes/' + uuid.uuid4().hex + '.json'
         body = json.dumps({'probe': uuid.uuid4().hex}).encode()
-        self.request('PUT', path, deadline, body)
+        phase = 'write'
         try:
+            self.request('PUT', path, deadline, body)
+            phase = 'read'
             if self.request('GET', path, deadline) != body:
                 raise ServiceError('invalid_probe_response', service='webdav')
-        finally:
+            phase = 'delete'
             self.request('DELETE', path, deadline, missing=True)
+        except ServiceError as exc:
+            # Report only the safe operation name; never expose credentials or paths.
+            exc.probe_phase = phase
+            raise
         return {'status': 'OK', 'write_read_delete': True, 'heater_control': False}
