@@ -333,6 +333,40 @@ print(json.dumps({'ok':True,'encrypted_session':True,'command_acknowledged':acti
         self.assertEqual(self.call().returncode, 0)
         self.assertIsNone(self.read_snapshot()['result']['current_temperature'])
 
+    def test_command_marker_publishes_confirmed_target_without_full_read_cycle(self):
+        # A real set call immediately updates the verified local state file.
+        self.assertEqual(self.call('read', 'h2').returncode, 0)
+        script = '''curl() {
+ cp "$HEATBRIDGE_ALICE_RUNTIME/telemetry/upload.json" "$HEATBRIDGE_PREFIX/uploaded.json"
+}
+. "''' + str(ROOT/'cloud/router/heatbridge-alice-state') + '"\\n'
+        worker = subprocess.Popen(['sh', '-c', script], env=self.env,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            uploaded = self.base/'uploaded.json'
+            until = time.monotonic()+3
+            while not uploaded.exists() and time.monotonic()<until:
+                time.sleep(.01)
+            self.assertTrue(uploaded.exists())
+            self.assertEqual(json.loads(uploaded.read_text())['devices']['h2']
+                             ['result']['reported_target'], 22)
+            self.assertEqual(self.call('set', 'h2', 28).returncode, 0)
+            marker_path = self.base/'runtime/telemetry/command-updated'
+            marker_path.touch()
+            until = time.monotonic()+1.8
+            target = None
+            while time.monotonic()<until:
+                data = json.loads(uploaded.read_text())
+                target = data['devices']['h2']['result']['reported_target']
+                if target == 28:
+                    break
+                time.sleep(.02)
+            self.assertEqual(target, 28, 'Priority publish missed the command marker')
+            self.assertFalse(marker_path.exists())
+        finally:
+            worker.terminate()
+            worker.wait(timeout=3)
+
     def test_poller_uploads_both_temperatures_from_existing_reader(self):
         script = '''curl() {
  cp "$HEATBRIDGE_ALICE_RUNTIME/telemetry/upload.json" "$HEATBRIDGE_PREFIX/uploaded.json"
