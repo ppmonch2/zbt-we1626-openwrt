@@ -31,24 +31,31 @@ class DiskServices:
             self.connection.close()
             self.connection = None
 
-    def request(self, method, path, deadline, body=b'', missing=False):
+    def request(self, method, path, deadline, body=b'', missing=False, timeout_cap=1.35):
         if not re.fullmatch(r'/(commands|acks|probes)/[A-Za-z0-9_.-]+', path):
             raise ValueError('Invalid Disk path')
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise ServiceError('deadline', service='webdav')
-        timeout = min(1.35, remaining)
+        timeout = min(timeout_cap, remaining)
         if self.connection is None:
             self.connection = http.client.HTTPSConnection('webdav.yandex.ru', timeout=timeout)
         connection = self.connection
         connection.timeout = timeout
         if connection.sock is not None:
             connection.sock.settimeout(timeout)
+        started = time.monotonic()
+        stage = 'connect'
         try:
+            if isinstance(connection, http.client.HTTPSConnection) and connection.sock is None:
+                connection.connect()
+            stage = 'send'
             connection.request(method, self.root + path, body=body, headers={
                 'Authorization': self.authorization, 'Content-Type': 'application/json',
                 'Cache-Control': 'no-cache', 'Accept': 'application/json'})
+            stage = 'response'
             response = connection.getresponse()
+            stage = 'body'
             status = response.status
             data = response.read(65537)
             response.close()
@@ -61,10 +68,19 @@ class DiskServices:
                 # Do not follow redirects or expose response bodies/credentials.
                 raise ServiceError('cloud_http_error', service='webdav', http_status=status)
             return data
-        except (OSError, http.client.HTTPException):
+        except (OSError, http.client.HTTPException) as problem:
             self.close()
-            # Never replay a write automatically: its outcome may be unknown.
-            raise ServiceError('cloud_connection_error', service='webdav') from None
+            # A timed-out PUT might already have been committed. Never retry it.
+            error = ServiceError('cloud_connection_error', service='webdav')
+            error.network_stage = stage
+            kind = type(problem).__name__
+            error.network_kind = kind if kind in (
+                'TimeoutError', 'ConnectionResetError', 'ConnectionRefusedError',
+                'BrokenPipeError', 'gaierror', 'SSLError', 'SSLEOFError',
+                'RemoteDisconnected', 'CannotSendRequest', 'ResponseNotReady',
+                'OSError') else 'other_network_error'
+            error.elapsed_ms = round((time.monotonic() - started) * 1000)
+            raise error from None
 
     def read_json(self, path, deadline):
         data = self.request('GET', path, deadline, missing=True)
@@ -112,7 +128,7 @@ class DiskServices:
         body = json.dumps({'probe': uuid.uuid4().hex}).encode()
         phase = 'write'
         try:
-            self.request('PUT', path, deadline, body)
+            self.request('PUT', path, deadline, body, timeout_cap=2.4)
             phase = 'read'
             if self.request('GET', path, deadline) != body:
                 raise ServiceError('invalid_probe_response', service='webdav')
