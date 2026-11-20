@@ -66,7 +66,7 @@ def catalog(names, state_available=False, push=False, hybrid=False):
              'description': 'Локальный Ballu через роутер, без HOMMYN',
              'capabilities': [
                  {'type': POWER, 'retrievable': state_available and not push, 'reportable': push or hybrid},
-                 {'type': RANGE, 'retrievable': state_available and not push, 'reportable': push,
+                 {'type': RANGE, 'retrievable': state_available and not push, 'reportable': push or hybrid,
                   'parameters': {'instance': 'temperature', 'unit': 'unit.temperature.celsius',
                                  'random_access': True, 'range': {'min': 10, 'max': 35, 'precision': 1}}}],
              **({'properties': [{'type': FLOAT, 'retrievable': not push, 'reportable': push or hybrid,
