@@ -61,6 +61,31 @@ class AliceStateTest(unittest.TestCase):
         self.assertNotIn('properties', old_router)
         self.assertFalse(old_router['capabilities'][1]['retrievable'])
 
+    def test_disk_discovery_is_stable_without_webdav_state_or_publisher(self):
+        class UnavailableDisk(StateServices):
+            transport = 'disk'
+            def state_snapshot(self, deadline):
+                raise ServiceError('cloud_connection_error', service='webdav')
+        client = UnavailableDisk(None)
+        discovery = self.request(client, 'discovery')['payload']['devices']
+        self.assertEqual(client.reads, 0)
+        self.assertEqual(len(discovery), 4)
+        self.assertTrue(all(all(c['retrievable'] for c in d['capabilities'])
+                            for d in discovery))
+        self.assertTrue(all(d['properties'][0]['retrievable'] for d in discovery))
+        # A failed current-state read still marks query as unreachable. We
+        # must not synthesize values, but device capabilities remain registered.
+        result = self.request(client, 'query')['payload']['devices'][0]
+        self.assertEqual(result['error_code'], 'DEVICE_UNREACHABLE')
+
+    def test_disk_discovery_is_retrievable_before_first_router_publication(self):
+        client = StateServices(None)
+        client.transport = 'disk'
+        d = self.request(client, 'discovery')['payload']['devices'][0]
+        self.assertEqual(client.reads, 0)
+        self.assertTrue(d['capabilities'][1]['retrievable'])
+        self.assertIn('properties', d)
+
     def test_query_reads_all_four_heaters_in_one_get_and_never_submits_commands(self):
         states = {f'h{i}': snapshot(f'h{i}', 20+i, 18+i/10, 0 if i == 1 else i-1)
                   for i in range(1, 5)}
