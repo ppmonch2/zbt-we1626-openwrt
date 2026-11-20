@@ -94,8 +94,16 @@ def process(event, names, owner_uid, services, authorize=cached_owner_authorized
         return {**response, 'payload': {'error_code': 'ACCOUNT_LINKING_ERROR'}}
     trace('authorized')
     kind = event.get('request_type')
+    disk_transport = getattr(services, 'transport', None) == 'disk'
     snapshot, state_error = None, False
     snapshot_loaded = kind in ('discovery', 'query')
+    # Device discovery describes capabilities, not current reachability.
+    # A momentary WebDAV failure or no first snapshot must not permanently
+    # register Disk-powered devices as retrievable:false in Alice.
+    if kind == 'discovery' and disk_transport:
+        trace('disk_discovery_without_state_dependency')
+        return {**response, 'payload': {'user_id': owner_uid,
+                'devices': catalog(names, True)}}
     if kind in ('discovery', 'query'):
         try:
             reader = getattr(services, 'state_snapshot', None)
