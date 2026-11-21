@@ -1,4 +1,4 @@
-"""Read-only VK mailbox proof-of-concept. No heating commands or credentials in logs.
+"""Private VK mailbox pilot. Heating commands require explicit confirmation; no credentials in logs.
 
 Cloud -> VK community chat -> router -> VK community chat -> cloud.
 Requires a community messages token, an owner chat and a 32-byte shared HMAC key.
@@ -20,6 +20,7 @@ VALID_TOKEN = re.compile(r"^[A-Za-z0-9._-]{20,512}$")
 VALID_HEX_KEY = re.compile(r"^[0-9a-fA-F]{64}$")
 VALID_NONCE = re.compile(r"^[a-f0-9]{24}$")
 VALID_MSG = re.compile(r"^HB1\.(PING|PONG)\.([a-f0-9]{24})\.([0-9]{10})\.([a-f0-9]{64})$")
+VALID_ACK = re.compile(r"^HB3\\.ACK\\.([a-f0-9]{24})\\.([0-9]{10})\\.([A-Za-z0-9_-]{1,2200})\\.([a-f0-9]{64})$")
 VALID_STATE = re.compile(r"^HB2\.STATE\.([a-f0-9]{24})\.([0-9]{10})\.([A-Za-z0-9_-]{1,2200})\.([a-f0-9]{64})$")
 MAX_AGE = 120
 
@@ -124,6 +125,83 @@ class VkClient:
         return answer["items"]
 
 
+
+def action_request(nonce, stamp, heater, action, value, key):
+    if not VALID_NONCE.fullmatch(nonce) or heater not in ("h1", "h2", "h3", "h4"):
+        raise ValueError("Invalid command identifier")
+    if action == "set":
+        if type(value) is not int or not 10 <= value <= 35:
+            raise ValueError("Invalid temperature")
+    elif action == "mode":
+        if type(value) is not int or value not in (0, 1):
+            raise ValueError("Invalid power mode")
+    else:
+        raise ValueError("Invalid command type")
+    body = f"HB3.CMD.{nonce}.{int(stamp)}.{heater}.{action}.{value}"
+    digest = hmac.new(key, body.encode("ascii"), hashlib.sha256).hexdigest()
+    return body + "." + digest
+
+
+def decode_action_ack(message, key, now=None):
+    if not isinstance(message, str):
+        return None
+    match = VALID_ACK.fullmatch(message)
+    if not match:
+        return None
+    nonce, stamp, encoded, mac = match.groups()
+    now = time.time() if now is None else now
+    if not 0 <= now - int(stamp) <= MAX_AGE:
+        return None
+    body = message[:message.rfind(".")]
+    expected = hmac.new(key, body.encode("ascii"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, mac):
+        return None
+    try:
+        raw = base64.b64decode(encoded.replace("-", "+").replace("_", "/")
+                               + "=" * (-len(encoded) % 4), validate=True)
+        if len(raw) > 900:
+            return None
+        obj = json.loads(raw)
+    except (ValueError, UnicodeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    heater, action, value = obj.get("heater"), obj.get("action"), obj.get("value")
+    status = obj.get("status")
+    if heater not in ("h1","h2","h3","h4") or action not in ("set","mode"):
+        return None
+    try:
+        action_request(nonce, stamp, heater, action, value, key)
+    except ValueError:
+        return None
+    if status not in ("DONE", "UNCONFIRMED", "REJECTED"):
+        return None
+    result = {"nonce": nonce, "heater": heater, "action": action,
+              "requested_value": value, "outcome": status}
+    if status == "DONE":
+        confirmed = obj.get("confirmed")
+        if confirmed is not True:
+            return None
+        measured = obj.get("reported_target") if action == "set" else obj.get("device_mode")
+        if type(measured) is not int or measured != value:
+            return None
+        result["confirmed_value"] = measured
+    return result
+
+
+def latest_action_ack(config, client, nonce, now=None):
+    now = time.time() if now is None else now
+    for item in client.history():
+        if not isinstance(item, dict) or item.get("out") != 1:
+            continue
+        if item.get("peer_id") != config["peer_id"] or item.get("from_id") != -config["group_id"]:
+            continue
+        ack = decode_action_ack(item.get("text"), config["key"], now)
+        if ack and ack["nonce"] == nonce:
+            return ack
+    return None
+
+
 def read_request(nonce, stamp, key):
     """Signed, read-only request; does not authorize an actuator command."""
     if not VALID_NONCE.fullmatch(nonce):
@@ -221,13 +299,35 @@ def run(event, config=None, client=None):
     if isinstance(event, (str, bytes)):
         event = json.loads(event)
     if not isinstance(event, dict) or set(event) not in (
-            {"vk_pilot"}, {"vk_pilot", "nonce"}):
+            {"vk_pilot"}, {"vk_pilot", "nonce"},
+            {"vk_pilot", "heater", "action", "value", "confirm"}):
         return {"status": "INVALID_REQUEST", "heater_control": False}
     action = event.get("vk_pilot")
-    if action not in ("check_api", "send_ping", "check_pong", "request_states", "check_states"):
+    if action not in ("check_api", "send_ping", "check_pong", "request_states", "check_states", "send_action", "check_action"):
         return {"status": "INVALID_REQUEST", "heater_control": False}
     config = config or settings_from_env()
     client = client or VkClient(config)
+    if action == "send_action":
+        if set(event) != {"vk_pilot", "heater", "action", "value", "confirm"} or event.get("confirm") != "EXECUTE":
+            return {"status": "CONFIRMATION_REQUIRED", "heater_control": False}
+        nonce = secrets.token_hex(12)
+        try:
+            message = action_request(nonce, time.time(),
+                                     event.get("heater"), event.get("action"),
+                                     event.get("value"), config["key"])
+        except ValueError:
+            return {"status": "INVALID_COMMAND", "heater_control": False}
+        client.send(message)
+        return {"status": "ACTION_SENT_NOT_CONFIRMED", "nonce": nonce,
+                "heater": event["heater"], "action": event["action"],
+                "requested_value": event["value"], "heater_control": True}
+    if action == "check_action":
+        nonce = event.get("nonce")
+        if set(event) != {"vk_pilot", "nonce"} or not isinstance(nonce, str) or not VALID_NONCE.fullmatch(nonce):
+            return {"status": "INVALID_REQUEST", "heater_control": False}
+        ack = latest_action_ack(config, client, nonce)
+        return ({"status": "ACTION_ACK", **ack, "heater_control": True} if ack else
+                {"status": "NO_ACTION_ACK", "heater_control": False})
     if action == "check_api":
         items = client.history()
         return {"status": "OK", "history_items": len(items), "heater_control": False}
