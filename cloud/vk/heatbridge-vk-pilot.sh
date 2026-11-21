@@ -6,7 +6,8 @@ export PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
 config="${HB_VK_CONFIG:-/opt/etc/heatbridge/vk-pilot.json}"
 runtime="${HB_VK_RUNTIME:-/tmp/heatbridge-vk-pilot}"
 state="${HB_VK_STATE:-/opt/var/lib/heatbridge-vk-pilot}"
-case "${1:---once}" in --once|--loop) mode="$1";; *) echo 'Usage: heatbridge-vk-pilot.sh [--once|--loop]' >&2; exit 2;; esac
+mode="${1:---once}"
+case "$mode" in --once|--loop) ;; *) echo 'Usage: heatbridge-vk-pilot.sh [--once|--loop]' >&2; exit 2;; esac
 for program in curl jq openssl; do
  command -v "$program" >/dev/null 2>&1 || { echo "MISSING_DEPENDENCY: $program"; exit 1; }
 done
