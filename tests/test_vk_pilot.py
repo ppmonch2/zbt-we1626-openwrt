@@ -164,5 +164,77 @@ class VkTelemetryTests(unittest.TestCase):
         result = vk_pilot.run({"vk_pilot":"check_states","nonce":"bad"},CONFIG,FakeVK())
         self.assertEqual(result["status"], "INVALID_REQUEST")
 
+
+class VkActionTests(unittest.TestCase):
+    def make_ack(self, nonce="ab"*12, heater="h1", action="set", value=26,
+                 outcome="DONE", confirmed=True, stamp=None):
+        import base64
+        stamp = int(time.time()) if stamp is None else int(stamp)
+        value_reported = {"reported_target": value} if action == "set" else {"device_mode": value}
+        payload = {"heater":heater, "action":action, "value":value, "status":outcome,
+                   "confirmed":confirmed, **value_reported}
+        encoded = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+        body = f"HB3.ACK.{nonce}.{stamp}.{encoded}"
+        mac = hmac.new(CONFIG["key"], body.encode("ascii"), hashlib.sha256).hexdigest()
+        return body + "." + mac
+
+    def test_action_requires_explicit_confirmation_and_exact_input(self):
+        fake=FakeVK()
+        self.assertEqual(vk_pilot.run({"vk_pilot":"send_action","heater":"h1","action":"set","value":26},
+                                      CONFIG,fake)["status"], "INVALID_REQUEST")
+        self.assertEqual(vk_pilot.run({"vk_pilot":"send_action","heater":"h1","action":"set","value":26,
+                                        "confirm":"NO"}, CONFIG,fake)["status"], "CONFIRMATION_REQUIRED")
+        self.assertEqual(fake.sent, [])
+        for heater, action, value in (("h5","set",24),("h1","set",9),("h1","set",36),
+                                      ("h1","mode",2),("h1","set",24.5),("h1","set",True)):
+            self.assertEqual(vk_pilot.run({"vk_pilot":"send_action","heater":heater,"action":action,
+                                            "value":value,"confirm":"EXECUTE"}, CONFIG,fake)["status"],
+                             "INVALID_COMMAND")
+        self.assertEqual(fake.sent, [])
+
+    def test_signed_action_sent_with_nonce_and_no_success_claim(self):
+        fake=FakeVK()
+        response=vk_pilot.run({"vk_pilot":"send_action","heater":"h3","action":"set",
+                               "value":25,"confirm":"EXECUTE"},CONFIG,fake)
+        self.assertEqual(response["status"],"ACTION_SENT_NOT_CONFIRMED")
+        self.assertTrue(response["heater_control"])
+        self.assertEqual(len(fake.sent),1)
+        message=fake.sent[0]
+        self.assertTrue(message.startswith("HB3.CMD."+response["nonce"]+"."))
+        body,signature=message.rsplit(".",1)
+        self.assertEqual(signature,hmac.new(CONFIG["key"],body.encode(),hashlib.sha256).hexdigest())
+
+    def test_signed_action_ack_reports_only_confirmed_actual_echo(self):
+        nonce="ab"*12
+        fake=FakeVK([outbound(self.make_ack(nonce))])
+        answer=vk_pilot.run({"vk_pilot":"check_action","nonce":nonce}, CONFIG,fake)
+        self.assertEqual(answer["status"],"ACTION_ACK")
+        self.assertEqual(answer["outcome"],"DONE")
+        self.assertEqual(answer["confirmed_value"],26)
+        self.assertEqual(answer["requested_value"],26)
+
+    def test_no_success_claim_for_partial_ack_wrong_value_or_old_response(self):
+        nonce="ab"*12
+        self.assertIsNone(vk_pilot.decode_action_ack(self.make_ack(nonce,confirmed=False),CONFIG["key"]))
+        body=self.make_ack(nonce)
+        corrupted=body[:-1]+("f" if body[-1]!="f" else "e")
+        self.assertIsNone(vk_pilot.decode_action_ack(corrupted,CONFIG["key"]))
+        self.assertIsNone(vk_pilot.decode_action_ack(self.make_ack(nonce,stamp=time.time()-130),CONFIG["key"]))
+        uncertain=vk_pilot.decode_action_ack(self.make_ack(nonce,outcome="UNCONFIRMED",confirmed=False),CONFIG["key"])
+        self.assertEqual(uncertain["outcome"],"UNCONFIRMED")
+        self.assertNotIn("confirmed_value",uncertain)
+
+    def test_wrong_origin_wrong_nonce_are_ignored(self):
+        nonce="ab"*12
+        sample=outbound(self.make_ack(nonce))
+        for alter in (lambda x: x.update(out=0),
+                      lambda x: x.update(peer_id=1),
+                      lambda x: x.update(from_id=-1000)):
+            msg=dict(sample);alter(msg)
+            answer=vk_pilot.run({"vk_pilot":"check_action","nonce":nonce}, CONFIG,FakeVK([msg]))
+            self.assertEqual(answer["status"],"NO_ACTION_ACK")
+        answer=vk_pilot.run({"vk_pilot":"check_action","nonce":"12"*12},CONFIG,FakeVK([sample]))
+        self.assertEqual(answer["status"],"NO_ACTION_ACK")
+
 if __name__ == "__main__":
     unittest.main()
