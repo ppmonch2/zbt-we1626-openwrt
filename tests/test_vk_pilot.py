@@ -102,5 +102,67 @@ class VkPilotTests(unittest.TestCase):
         self.assertEqual(result["status"],"INVALID_CONFIGURATION_OR_INPUT")
         self.assertNotIn("something",repr(result))
 
+
+class VkTelemetryTests(unittest.TestCase):
+    def make_state(self, nonce="aa"*12, observed=None):
+        stamp = int(time.time())
+        if observed is None:
+            observed = stamp-4
+        bodydata = {"schema": 1, "devices": {
+            "h1": {"observed_at": observed, "reported_target": 25,
+                   "current_temperature": 19.5, "device_mode": 1},
+            "h2": {"observed_at": observed, "reported_target": 21,
+                   "current_temperature": 20.0, "device_mode": 0}}}
+        import base64
+        encoded = base64.urlsafe_b64encode(json.dumps(bodydata, separators=(",", ":")).encode()).decode().rstrip("=")
+        body = f"HB2.STATE.{nonce}.{stamp}.{encoded}"
+        mac = hmac.new(CONFIG["key"], body.encode(), hashlib.sha256).hexdigest()
+        return body + "." + mac
+
+    def test_request_is_read_only_and_hmac_authenticated(self):
+        fake = FakeVK()
+        response = vk_pilot.run({"vk_pilot": "request_states"}, CONFIG, fake)
+        self.assertEqual(response["status"], "STATE_REQUEST_SENT")
+        self.assertFalse(response["heater_control"])
+        self.assertEqual(len(fake.sent), 1)
+        self.assertTrue(fake.sent[0].startswith("HB2.READ." + response["nonce"]))
+        wrong_key = b"2"*32
+        body, signature = fake.sent[0].rsplit(".", 1)
+        self.assertNotEqual(signature, hmac.new(wrong_key, body.encode(), hashlib.sha256).hexdigest())
+
+    def test_response_validates_payload_and_origin_and_nonce(self):
+        nonce = "aa"*12
+        payload = self.make_state(nonce)
+        client = FakeVK([outbound(payload)])
+        result = vk_pilot.run({"vk_pilot":"check_states", "nonce":nonce}, CONFIG, client)
+        self.assertEqual(result["status"], "STATE_RECEIVED")
+        self.assertEqual(result["devices"]["h1"]["reported_target"], 25)
+        self.assertTrue(result["devices"]["h1"]["fresh"])
+        for alter in (
+            lambda item: item.update(peer_id=123),
+            lambda item: item.update(from_id=-123),
+            lambda item: item.update(out=0),
+            lambda item: item.update(text=item["text"][:-1]+"f" if item["text"][-1] != "f" else item["text"][:-1]+"e"),
+        ):
+            item = outbound(payload)
+            alter(item)
+            result = vk_pilot.run({"vk_pilot":"check_states", "nonce":nonce},CONFIG,FakeVK([item]))
+            self.assertEqual(result["status"], "NO_STATE_YET")
+
+    def test_stale_states_labeled_not_fresh(self):
+        result = vk_pilot.decode_state(self.make_state(observed=time.time()-300), CONFIG["key"])
+        self.assertIsNotNone(result)
+        self.assertFalse(result["devices"]["h2"]["fresh"])
+
+    def test_message_age_rejects_expired_and_future(self):
+        state = self.make_state()
+        self.assertIsNotNone(vk_pilot.decode_state(state,CONFIG["key"]))
+        self.assertIsNone(vk_pilot.decode_state(state,CONFIG["key"],now=time.time()+121))
+        self.assertIsNone(vk_pilot.decode_state(state,CONFIG["key"],now=time.time()-5))
+
+    def test_invalid_nonce_does_not_trigger_history(self):
+        result = vk_pilot.run({"vk_pilot":"check_states","nonce":"bad"},CONFIG,FakeVK())
+        self.assertEqual(result["status"], "INVALID_REQUEST")
+
 if __name__ == "__main__":
     unittest.main()
