@@ -1,0 +1,6 @@
+{
+  "token": "PASTE_YOUR_COMMUNITY_MESSAGES_TOKEN",
+  "group_id": 0,
+  "peer_id": 0,
+  "hmac_key": "PASTE_A_64_CHARACTER_RANDOM_HEX_KEY"
+}
