@@ -20,7 +20,7 @@ VALID_TOKEN = re.compile(r"^[A-Za-z0-9._-]{20,512}$")
 VALID_HEX_KEY = re.compile(r"^[0-9a-fA-F]{64}$")
 VALID_NONCE = re.compile(r"^[a-f0-9]{24}$")
 VALID_MSG = re.compile(r"^HB1\.(PING|PONG)\.([a-f0-9]{24})\.([0-9]{10})\.([a-f0-9]{64})$")
-VALID_ACK = re.compile(r"^HB3\\.ACK\\.([a-f0-9]{24})\\.([0-9]{10})\\.([A-Za-z0-9_-]{1,2200})\\.([a-f0-9]{64})$")
+VALID_ACK = re.compile(r"^HB3\.ACK\.([a-f0-9]{24})\.([0-9]{10})\.([A-Za-z0-9_-]{1,2200})\.([a-f0-9]{64})$")
 VALID_STATE = re.compile(r"^HB2\.STATE\.([a-f0-9]{24})\.([0-9]{10})\.([A-Za-z0-9_-]{1,2200})\.([a-f0-9]{64})$")
 MAX_AGE = 120
 
