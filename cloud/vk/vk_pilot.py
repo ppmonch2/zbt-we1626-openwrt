@@ -3,6 +3,7 @@
 Cloud -> VK community chat -> router -> VK community chat -> cloud.
 Requires a community messages token, an owner chat and a 32-byte shared HMAC key.
 """
+import base64
 import hashlib
 import hmac
 import http.client
@@ -19,6 +20,7 @@ VALID_TOKEN = re.compile(r"^[A-Za-z0-9._-]{20,512}$")
 VALID_HEX_KEY = re.compile(r"^[0-9a-fA-F]{64}$")
 VALID_NONCE = re.compile(r"^[a-f0-9]{24}$")
 VALID_MSG = re.compile(r"^HB1\.(PING|PONG)\.([a-f0-9]{24})\.([0-9]{10})\.([a-f0-9]{64})$")
+VALID_STATE = re.compile(r"^HB2\.STATE\.([a-f0-9]{24})\.([0-9]{10})\.([A-Za-z0-9_-]{1,2200})\.([a-f0-9]{64})$")
 MAX_AGE = 120
 
 
@@ -122,6 +124,81 @@ class VkClient:
         return answer["items"]
 
 
+def read_request(nonce, stamp, key):
+    """Signed, read-only request; does not authorize an actuator command."""
+    if not VALID_NONCE.fullmatch(nonce):
+        raise ValueError("Invalid nonce")
+    body = f"HB2.READ.{nonce}.{int(stamp)}"
+    mac = hmac.new(key, body.encode("ascii"), hashlib.sha256).hexdigest()
+    return body + "." + mac
+
+
+def decode_state(message, key, now=None):
+    """Accept only a fresh signed reply for known heater IDs and numeric fields."""
+    if not isinstance(message, str):
+        return None
+    match = VALID_STATE.fullmatch(message)
+    if not match:
+        return None
+    nonce, stamp, encoded, signature = match.groups()
+    stamp = int(stamp)
+    now = time.time() if now is None else now
+    if not 0 <= now - stamp <= MAX_AGE:
+        return None
+    body = message[:message.rfind(".")]
+    expected = hmac.new(key, body.encode("ascii"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        return None
+    try:
+        raw = base64.b64decode(encoded.replace("-", "+").replace("_", "/")
+                               + "=" * (-len(encoded) % 4), validate=True)
+        if len(raw) > 1300:
+            return None
+        data = json.loads(raw)
+    except (ValueError, UnicodeError):
+        return None
+    if not isinstance(data, dict) or data.get("schema") != 1:
+        return None
+    devices = data.get("devices")
+    if not isinstance(devices, dict) or len(devices) > 4:
+        return None
+    filtered = {}
+    for heater, entry in devices.items():
+        if heater not in ("h1", "h2", "h3", "h4") or not isinstance(entry, dict):
+            return None
+        stamp_observed = entry.get("observed_at")
+        if (type(stamp_observed) not in (int, float) or
+                not 0 <= now - stamp_observed <= 86400):
+            return None
+        reported = entry.get("reported_target")
+        ambient = entry.get("current_temperature")
+        mode = entry.get("device_mode")
+        if (type(reported) is not int or not 5 <= reported <= 35 or
+                type(ambient) not in (int, float) or not -50 <= ambient <= 80 or
+                type(mode) is not int or not 0 <= mode <= 3):
+            return None
+        filtered[heater] = {
+            "reported_target": reported, "current_temperature": ambient,
+            "device_mode": mode, "age_seconds": round(now - stamp_observed, 1),
+            "fresh": now - stamp_observed <= 90,
+        }
+    return {"nonce": nonce, "devices": filtered}
+
+
+def latest_states(config, client, nonce, now=None):
+    now = time.time() if now is None else now
+    for item in client.history():
+        if not isinstance(item, dict):
+            continue
+        if (item.get("out") != 1 or item.get("peer_id") != config["peer_id"]
+                or item.get("from_id") != -config["group_id"]):
+            continue
+        state = decode_state(item.get("text"), config["key"], now)
+        if state is not None and state["nonce"] == nonce:
+            return state
+    return None
+
+
 def latest_pong(config, client, nonce=None, now=None):
     now = time.time() if now is None else now
     matching = []
@@ -147,13 +224,26 @@ def run(event, config=None, client=None):
             {"vk_pilot"}, {"vk_pilot", "nonce"}):
         return {"status": "INVALID_REQUEST", "heater_control": False}
     action = event.get("vk_pilot")
-    if action not in ("check_api", "send_ping", "check_pong"):
+    if action not in ("check_api", "send_ping", "check_pong", "request_states", "check_states"):
         return {"status": "INVALID_REQUEST", "heater_control": False}
     config = config or settings_from_env()
     client = client or VkClient(config)
     if action == "check_api":
         items = client.history()
         return {"status": "OK", "history_items": len(items), "heater_control": False}
+    if action == "request_states":
+        nonce = secrets.token_hex(12)
+        client.send(read_request(nonce, time.time(), config["key"]))
+        return {"status": "STATE_REQUEST_SENT", "nonce": nonce,
+                "heater_control": False}
+    if action == "check_states":
+        nonce = event.get("nonce")
+        if not isinstance(nonce, str) or not VALID_NONCE.fullmatch(nonce):
+            return {"status": "INVALID_REQUEST", "heater_control": False}
+        result = latest_states(config, client, nonce)
+        return ({"status": "STATE_RECEIVED", **result,
+                 "heater_control": False} if result else
+                {"status": "NO_STATE_YET", "heater_control": False})
     if action == "send_ping":
         nonce = secrets.token_hex(12)
         text = pack("PING", nonce, time.time(), config["key"])
