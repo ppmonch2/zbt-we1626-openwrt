@@ -25,13 +25,15 @@ jobs:
           python3 -m unittest discover -s tests -p test_vk_pilot.py -v
           python3 -m py_compile cloud/vk/vk_pilot.py
           sh -n cloud/vk/heatbridge-vk-pilot.sh
+          sh -n cloud/vk/heatbridge-vk-state.sh
           grep -q 'NEVER touches heaters' cloud/vk/heatbridge-vk-pilot.sh
+          grep -q 'Never calls heatbridge-device' cloud/vk/heatbridge-vk-state.sh
       - name: Package cloud and router without credentials
         run: |
           mkdir -p out-vk-pilot
           (cd cloud/vk; zip -q ../../out-vk-pilot/VK-Pilot-Cloud.zip vk_pilot.py)
-          (cd cloud/vk; sha256sum heatbridge-vk-pilot.sh > SHA256SUMS)
-          (cd cloud/vk; zip -q ../../out-vk-pilot/VK-Pilot-Router.zip heatbridge-vk-pilot.sh vk-pilot.example.json SHA256SUMS)
+          (cd cloud/vk; sha256sum heatbridge-vk-pilot.sh heatbridge-vk-state.sh > SHA256SUMS)
+          (cd cloud/vk; zip -q ../../out-vk-pilot/VK-Pilot-Router.zip heatbridge-vk-pilot.sh heatbridge-vk-state.sh vk-pilot.example.json SHA256SUMS)
           unzip -t out-vk-pilot/VK-Pilot-Cloud.zip
           unzip -t out-vk-pilot/VK-Pilot-Router.zip
       - uses: actions/upload-artifact@v4
